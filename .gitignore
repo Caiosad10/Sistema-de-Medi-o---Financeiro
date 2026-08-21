@@ -1,0 +1,25 @@
+# Bancos de dados
+*.db
+*.sqlite
+*.sqlite3
+
+# Pastas geradas pelo Python
+__pycache__/
+
+# Pastas de backup/build
+backup/
+build/
+dist/
+
+# Arquivos de build
+*.spec
+*.ps1
+
+# Arquivos Excel
+*.xlsx
+*.xls
+
+#outros
+*.qm
+
+!TEMPLATE_MEDICAO_AEV_LIMPO_V2_VALIDADO.xlsx
