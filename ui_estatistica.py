@@ -55,9 +55,19 @@ class TelaEstatisticas(QWidget):
         lbl_projeto = QLabel("Projeto:")
         self.combo_projeto = QComboBox()
         self.combo_projeto.currentIndexChanged.connect(self.carregar_dados)
+
+        lbl_tipo = QLabel("Tipo:")
+        self.combo_tipo = QComboBox()
+        self.combo_tipo.addItem("Todos (saldo atual)", None)
+        for key, label in database.TIPOS_CICLO.items():
+            self.combo_tipo.addItem(label, key)
+        self.combo_tipo.currentIndexChanged.connect(self.carregar_dados)
         
         layout_filtros.addWidget(lbl_projeto)
         layout_filtros.addWidget(self.combo_projeto)
+        layout_filtros.addSpacing(16)
+        layout_filtros.addWidget(lbl_tipo)
+        layout_filtros.addWidget(self.combo_tipo)
         layout_filtros.addStretch()
         
         layout_resumo.addWidget(frame_filtros)
@@ -239,30 +249,61 @@ class TelaEstatisticas(QWidget):
         prestador_filtro = self.combo_prestador.currentText()
         if prestador_filtro == "Todos":
             prestador_filtro = None
-        
-        # Carrega estatísticas
-        dados = database.carregar_estatisticas_projeto(projeto, prestador_filtro)
-        totais = dados.get('totais', {})
-        prestadores = dados.get('prestadores', [])
-        
-        # Atualiza cards
-        for card in [self.card_total, self.card_pago, self.card_saldo]:
-            for child in card.findChildren(QLabel):
-                if child.objectName() == "valor_card_est":
-                    if card == self.card_total:
-                        child.setText(utils.float_para_moeda(totais.get('total_projeto', 0)))
-                    elif card == self.card_pago:
-                        child.setText(utils.float_para_moeda(totais.get('total_pago', 0)))
-                    elif card == self.card_saldo:
-                        child.setText(utils.float_para_moeda(totais.get('saldo_em_aberto', 0)))
+
+        tipo_filtro = self.combo_tipo.currentData()
+
+        if tipo_filtro:
+            # Filtro por tipo → dados do histórico (pagamentos já fechados daquele tipo)
+            dados = database.carregar_estatisticas_por_tipo(
+                projeto, tipo_ciclo=tipo_filtro, prestador_filtro=prestador_filtro
+            )
+            totais = dados.get("totais", {})
+            prestadores = dados.get("prestadores", [])
+            total_pago = totais.get("total_pago", 0)
+            qtd = totais.get("quantidade_pcs", 0)
+            fechamentos = totais.get("quantidade_fechamentos", 0)
+
+            for card in [self.card_total, self.card_pago, self.card_saldo]:
+                for child in card.findChildren(QLabel):
+                    if child.objectName() == "valor_card_est":
+                        if card == self.card_total:
+                            child.setText(f"{fechamentos} fechamento(s)")
+                        elif card == self.card_pago:
+                            child.setText(utils.float_para_moeda(total_pago))
+                        elif card == self.card_saldo:
+                            child.setText(f"{qtd} PC(s)")
+
+            # Ajusta títulos dos cards no modo tipo
+            self._set_titulo_card(self.card_total, "📋 FECHAMENTOS")
+            self._set_titulo_card(self.card_pago, "✅ TOTAL PAGO (HISTÓRICO)")
+            self._set_titulo_card(self.card_saldo, "📦 QTD. PCs")
+        else:
+            # Todos → saldo atual do projeto (lançamentos)
+            dados = database.carregar_estatisticas_projeto(projeto, prestador_filtro)
+            totais = dados.get("totais", {})
+            prestadores = dados.get("prestadores", [])
+
+            for card in [self.card_total, self.card_pago, self.card_saldo]:
+                for child in card.findChildren(QLabel):
+                    if child.objectName() == "valor_card_est":
+                        if card == self.card_total:
+                            child.setText(utils.float_para_moeda(totais.get("total_projeto", 0)))
+                        elif card == self.card_pago:
+                            child.setText(utils.float_para_moeda(totais.get("total_pago", 0)))
+                        elif card == self.card_saldo:
+                            child.setText(utils.float_para_moeda(totais.get("saldo_em_aberto", 0)))
+
+            self._set_titulo_card(self.card_total, "💰 TOTAL DO PROJETO")
+            self._set_titulo_card(self.card_pago, "✅ TOTAL PAGO")
+            self._set_titulo_card(self.card_saldo, "⏳ SALDO EM ABERTO")
         
         # Atualiza combo de prestadores
         self.combo_prestador.blockSignals(True)
         self.combo_prestador.clear()
         self.combo_prestador.addItem("Todos")
         for p in prestadores:
-            if p.get('prestador'):
-                self.combo_prestador.addItem(p['prestador'])
+            if p.get("prestador"):
+                self.combo_prestador.addItem(p["prestador"])
         if prestador_filtro and self.combo_prestador.findText(prestador_filtro) >= 0:
             self.combo_prestador.setCurrentText(prestador_filtro)
         self.combo_prestador.blockSignals(False)
@@ -271,10 +312,31 @@ class TelaEstatisticas(QWidget):
         self.tabela_prestadores.setRowCount(0)
         for row_idx, p in enumerate(prestadores):
             self.tabela_prestadores.insertRow(row_idx)
-            self.tabela_prestadores.setItem(row_idx, 0, QTableWidgetItem(p.get('prestador', '')))
-            self.tabela_prestadores.setItem(row_idx, 1, QTableWidgetItem(utils.float_para_moeda(p.get('pago', 0))))
-            self.tabela_prestadores.setItem(row_idx, 2, QTableWidgetItem(utils.float_para_moeda(p.get('saldo', 0))))
-            self.tabela_prestadores.setItem(row_idx, 3, QTableWidgetItem(utils.float_para_moeda(p.get('total', 0))))
+            self.tabela_prestadores.setItem(row_idx, 0, QTableWidgetItem(p.get("prestador", "")))
+            self.tabela_prestadores.setItem(row_idx, 1, QTableWidgetItem(utils.float_para_moeda(p.get("pago", 0))))
+            if tipo_filtro:
+                # No modo histórico por tipo não há "saldo em aberto" por prestador
+                self.tabela_prestadores.setItem(
+                    row_idx, 2, QTableWidgetItem(str(p.get("qtd_pcs", 0)))
+                )
+                self.tabela_prestadores.setItem(
+                    row_idx, 3, QTableWidgetItem(utils.float_para_moeda(p.get("pago", 0)))
+                )
+            else:
+                self.tabela_prestadores.setItem(
+                    row_idx, 2, QTableWidgetItem(utils.float_para_moeda(p.get("saldo", 0)))
+                )
+                self.tabela_prestadores.setItem(
+                    row_idx, 3, QTableWidgetItem(utils.float_para_moeda(p.get("total", 0)))
+                )
+
+    def _set_titulo_card(self, card, texto):
+        for child in card.findChildren(QLabel):
+            if child.objectName() != "valor_card_est":
+                # título do card (primeiro label sem objectName de valor)
+                if "valor" not in (child.objectName() or "").lower():
+                    child.setText(texto)
+                    break
     
     def abrir_detalhes_prestador(self):
         row = self.tabela_prestadores.currentRow()

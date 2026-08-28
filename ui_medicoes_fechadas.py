@@ -1,18 +1,18 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QFrame
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget
 from ui_historico import TelaHistorico
 from ui_estatistica import TelaEstatisticas
+
 
 class TelaMedicoesFechadas(QWidget):
     def __init__(self):
         super().__init__()
         self.init_ui()
-    
+
     def init_ui(self):
         layout_principal = QVBoxLayout(self)
         layout_principal.setContentsMargins(0, 0, 0, 0)
         layout_principal.setSpacing(0)
-        
-        # Cria as abas
+
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet("""
             QTabWidget::pane {
@@ -39,11 +39,22 @@ class TelaMedicoesFechadas(QWidget):
                 color: #f8fafc;
             }
         """)
-        
-        # Aba 1: Histórico
-        self.tabs.addTab(TelaHistorico(), "📋 Histórico")
-        
-        # Aba 2: Estatísticas
-        self.tabs.addTab(TelaEstatisticas(), "📊 Estatísticas")
-        
+
+        self.tela_historico = TelaHistorico()
+        self.tabs.addTab(self.tela_historico, "📋 Histórico")
+
+        self.tela_estatisticas = TelaEstatisticas()
+        self.tabs.addTab(self.tela_estatisticas, "📊 Estatísticas")
+
         layout_principal.addWidget(self.tabs)
+
+    def recarregar(self):
+        """Atualiza histórico e estatísticas ao entrar na tela."""
+        try:
+            self.tela_historico.carregar_historico()
+        except Exception:
+            pass
+        try:
+            self.tela_estatisticas.carregar_dados()
+        except Exception:
+            pass

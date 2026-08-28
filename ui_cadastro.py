@@ -193,10 +193,10 @@ class TelaCadastro(QWidget):
 
         # 3. Persistência
         if self.fornecedor_em_edicao_cnpj:
-            sucesso = database.atualizar_fornecedor(self.fornecedor_em_edicao_cnpj, dados)
+            sucesso, erro = database.atualizar_fornecedor(self.fornecedor_em_edicao_cnpj, dados)
             msg = "Fornecedor atualizado com sucesso!"
         else:
-            sucesso = database.adicionar_fornecedor(dados)
+            sucesso, erro = database.adicionar_fornecedor(dados)
             msg = "Novo fornecedor cadastrado!"
             
         if sucesso:
@@ -204,7 +204,11 @@ class TelaCadastro(QWidget):
             self.limpar_campos()
             self.carregar_dados_tabela()
         else:
-            QMessageBox.critical(self, "Erro", "Houve um problema ao salvar os dados no sistema.")
+            QMessageBox.critical(
+                self,
+                "Erro ao salvar",
+                erro or "Houve um problema ao salvar os dados no sistema.",
+            )
 
     def limpar_campos(self):
         """Reseta o formulário"""

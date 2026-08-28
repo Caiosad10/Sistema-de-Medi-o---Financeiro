@@ -142,6 +142,9 @@ class JanelaPrincipal(QMainWindow):
 
         if indice == 1:
             self.tela_lancamentos.carregar_fornecedores_combo()
+            self.tela_lancamentos.carregar_dados_tabela()
+        elif indice == 2:
+            self.tela_medicoes_fechadas.recarregar()
 
 
 if __name__ == "__main__":

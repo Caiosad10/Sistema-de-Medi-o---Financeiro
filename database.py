@@ -26,7 +26,21 @@ COLUNAS_HISTORICO_EXTRAS = [
     ("end_id", "TEXT"),
     ("nota_fiscal", "TEXT"),
     ("regional", "TEXT"),
+    ("tipo_ciclo", "TEXT"),
 ]
+
+# Tipos de ciclo (abas de medição)
+TIPO_NOVA_MEDICAO = "NOVA_MEDICAO"
+TIPO_SALDOS_FINAIS = "SALDOS_FINAIS"
+TIPO_SOLICITACAO_EMERGENCIAL = "SOLICITACAO_EMERGENCIAL"
+
+TIPOS_CICLO = {
+    TIPO_NOVA_MEDICAO: "Medição",
+    TIPO_SALDOS_FINAIS: "Saldos Finais",
+    TIPO_SOLICITACAO_EMERGENCIAL: "Solicitação Emergencial",
+}
+
+LIMITE_ABAS_POR_PROJETO = 8
 
 SELECT_LANCAMENTO_COLUNAS = """
     l.pc AS "PC", l.prestador AS "PRESTADOR", l.atividade AS "ATIVIDADE/SERVIÇO",
@@ -34,7 +48,8 @@ SELECT_LANCAMENTO_COLUNAS = """
     l.valores_pagos AS "VALORES PAGOS", l.saldo_a_pagar AS "SALDO A PAGAR",
     l.valor_a_pagar AS "VALOR A PAGAR", l.saldo_aberto AS "SALDO EM ABERTO",
     l.status_pc AS "STATUS PC", l.oc AS "OC", l.end_id AS "END ID",
-    l.nota_fiscal AS "NOTA FISCAL", l.regional AS "REGIONAL"
+    l.nota_fiscal AS "NOTA FISCAL", l.regional AS "REGIONAL",
+    l.ciclo_id AS "CICLO_ID"
 """
 
 def get_connection():
@@ -45,12 +60,79 @@ def get_connection():
     return conn
 
 def _migrar_banco(cursor):
-    """Adiciona colunas novas em bancos já existentes sem perder dados."""
+    """Adiciona colunas/tabelas novas em bancos já existentes sem perder dados."""
+    # --- histórico: colunas extras ---
     cursor.execute("PRAGMA table_info(historico_medicoes)")
-    colunas_existentes = {row[1] for row in cursor.fetchall()}
+    colunas_hist = {row[1] for row in cursor.fetchall()}
     for nome, tipo in COLUNAS_HISTORICO_EXTRAS:
-        if nome not in colunas_existentes:
+        if nome not in colunas_hist:
             cursor.execute(f"ALTER TABLE historico_medicoes ADD COLUMN {nome} {tipo}")
+
+    # --- tabela ciclos (abas de medição) ---
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ciclos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        projeto_id INTEGER NOT NULL,
+        titulo TEXT,
+        tipo TEXT NOT NULL DEFAULT 'NOVA_MEDICAO',
+        aberto INTEGER NOT NULL DEFAULT 1,
+        data_criacao TEXT,
+        ordem INTEGER DEFAULT 0,
+        FOREIGN KEY (projeto_id) REFERENCES projetos(id) ON DELETE CASCADE
+    )
+    """)
+
+    # --- lancamentos: coluna ciclo_id ---
+    cursor.execute("PRAGMA table_info(lancamentos)")
+    colunas_lanc = {row[1] for row in cursor.fetchall()}
+    if "ciclo_id" not in colunas_lanc:
+        cursor.execute("ALTER TABLE lancamentos ADD COLUMN ciclo_id INTEGER REFERENCES ciclos(id)")
+
+    # --- migração: lançamentos sem ciclo → um ciclo "Medição" por projeto ---
+    # Se o projeto só tem residual (valor_a_pagar = 0), o ciclo nasce FECHADO,
+    # para não reaparecer como "medição ativa" na tela de Lançamentos.
+    cursor.execute("""
+        SELECT DISTINCT l.projeto_id
+        FROM lancamentos l
+        WHERE l.ciclo_id IS NULL
+    """)
+    projetos_sem_ciclo = [row[0] for row in cursor.fetchall()]
+    from datetime import datetime
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+    for projeto_id in projetos_sem_ciclo:
+        cursor.execute("""
+            SELECT COUNT(*) FROM lancamentos
+            WHERE projeto_id = ? AND ciclo_id IS NULL AND valor_a_pagar > 0
+        """, (projeto_id,))
+        tem_ativo = cursor.fetchone()[0] > 0
+        aberto = 1 if tem_ativo else 0
+        cursor.execute("""
+            INSERT INTO ciclos (projeto_id, titulo, tipo, aberto, data_criacao, ordem)
+            VALUES (?, ?, ?, ?, ?, 0)
+        """, (projeto_id, "Medição", TIPO_NOVA_MEDICAO, aberto, agora))
+        ciclo_id = cursor.lastrowid
+        cursor.execute("""
+            UPDATE lancamentos SET ciclo_id = ?
+            WHERE projeto_id = ? AND ciclo_id IS NULL
+        """, (ciclo_id, projeto_id))
+
+    # Ciclos abertos que só têm residual (valor_a_pagar = 0) e já têm linhas
+    # → fecha, para não poluir a tela após migração da versão antiga.
+    # Abas vazias (sem lançamentos) continuam abertas.
+    cursor.execute("""
+        SELECT c.id
+        FROM ciclos c
+        WHERE c.aberto = 1
+          AND EXISTS (
+              SELECT 1 FROM lancamentos l WHERE l.ciclo_id = c.id
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM lancamentos l
+              WHERE l.ciclo_id = c.id AND l.valor_a_pagar > 0
+          )
+    """)
+    for (cid,) in cursor.fetchall():
+        cursor.execute("UPDATE ciclos SET aberto = 0 WHERE id = ?", (cid,))
 
 def inicializar_banco():
     """Inicializa o banco de dados com as tabelas e dados iniciais"""
@@ -78,11 +160,25 @@ def inicializar_banco():
             chave_pix TEXT
         )
         """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ciclos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            projeto_id INTEGER NOT NULL,
+            titulo TEXT,
+            tipo TEXT NOT NULL DEFAULT 'NOVA_MEDICAO',
+            aberto INTEGER NOT NULL DEFAULT 1,
+            data_criacao TEXT,
+            ordem INTEGER DEFAULT 0,
+            FOREIGN KEY (projeto_id) REFERENCES projetos(id) ON DELETE CASCADE
+        )
+        """)
         
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS lancamentos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             projeto_id INTEGER NOT NULL,
+            ciclo_id INTEGER,
             pc TEXT NOT NULL,
             prestador TEXT,
             atividade TEXT,
@@ -97,11 +193,11 @@ def inicializar_banco():
             end_id TEXT,
             nota_fiscal TEXT,
             regional TEXT,
-            FOREIGN KEY (projeto_id) REFERENCES projetos(id) ON DELETE CASCADE
+            FOREIGN KEY (projeto_id) REFERENCES projetos(id) ON DELETE CASCADE,
+            FOREIGN KEY (ciclo_id) REFERENCES ciclos(id) ON DELETE SET NULL
         )
         """)
 
-        # Tabela atualizada com as 5 novas colunas
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS historico_medicoes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,6 +220,7 @@ def inicializar_banco():
             nota_fiscal TEXT,
             regional TEXT,
             status TEXT,
+            tipo_ciclo TEXT,
             data_registro DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (projeto_id) REFERENCES projetos(id) ON DELETE CASCADE
         )
@@ -133,10 +230,21 @@ def inicializar_banco():
 
         for proj in PROJETOS_SISTEMA:
             cursor.execute("INSERT OR IGNORE INTO projetos (nome) VALUES (?)", (proj,))
-        
+
+        # Importa planilha base SOMENTE em instalação virgem.
+        # Se já existe histórico, fornecedores ou lançamentos, o banco já foi usado
+        # e NÃO deve ser repovoado (mesmo com zero lançamentos abertos).
         cursor.execute("SELECT COUNT(*) FROM lancamentos")
-        if cursor.fetchone()[0] == 0:
+        qtd_lanc = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM historico_medicoes")
+        qtd_hist = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM fornecedores")
+        qtd_forn = cursor.fetchone()[0]
+
+        if qtd_lanc == 0 and qtd_hist == 0 and qtd_forn == 0:
             importar_dados_iniciais(conn)
+            # Garante que lançamentos importados recebam um ciclo
+            _migrar_banco(cursor)
         
         conn.commit()
 
@@ -243,6 +351,162 @@ def carregar_projetos():
         cursor.execute("SELECT nome FROM projetos ORDER BY id ASC")
         return [row[0] for row in cursor.fetchall()]
 
+
+def _obter_projeto_id(cursor, nome_projeto):
+    cursor.execute("SELECT id FROM projetos WHERE nome = ?", (nome_projeto,))
+    res = cursor.fetchone()
+    return res[0] if res else None
+
+
+def listar_ciclos_abertos(nome_projeto="PROJETO AEV"):
+    """Lista ciclos abertos do projeto, ordenados por ordem/id."""
+    with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT c.id, c.titulo, c.tipo, c.aberto, c.data_criacao, c.ordem
+            FROM ciclos c
+            JOIN projetos p ON c.projeto_id = p.id
+            WHERE p.nome = ? AND c.aberto = 1
+            ORDER BY c.ordem ASC, c.id ASC
+        """, (nome_projeto,))
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def contar_ciclos_abertos(nome_projeto="PROJETO AEV"):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*)
+            FROM ciclos c
+            JOIN projetos p ON c.projeto_id = p.id
+            WHERE p.nome = ? AND c.aberto = 1
+        """, (nome_projeto,))
+        return cursor.fetchone()[0]
+
+
+def obter_ciclo(ciclo_id):
+    with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT c.id, c.titulo, c.tipo, c.aberto, c.data_criacao, c.ordem, p.nome AS projeto
+            FROM ciclos c
+            JOIN projetos p ON c.projeto_id = p.id
+            WHERE c.id = ?
+        """, (ciclo_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def criar_ciclo(nome_projeto, tipo=TIPO_NOVA_MEDICAO, titulo=None):
+    """
+    Cria um novo ciclo aberto no projeto.
+    Retorna o id do ciclo ou None em caso de erro/limite.
+    """
+    if tipo not in TIPOS_CICLO:
+        tipo = TIPO_NOVA_MEDICAO
+    if not titulo or not str(titulo).strip():
+        titulo = TIPOS_CICLO.get(tipo, "Medição")
+
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            projeto_id = _obter_projeto_id(cursor, nome_projeto)
+            if not projeto_id:
+                return None
+
+            cursor.execute("""
+                SELECT COUNT(*) FROM ciclos
+                WHERE projeto_id = ? AND aberto = 1
+            """, (projeto_id,))
+            if cursor.fetchone()[0] >= LIMITE_ABAS_POR_PROJETO:
+                return None
+
+            cursor.execute("""
+                SELECT COALESCE(MAX(ordem), -1) + 1 FROM ciclos
+                WHERE projeto_id = ? AND aberto = 1
+            """, (projeto_id,))
+            ordem = cursor.fetchone()[0]
+
+            from datetime import datetime
+            agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+            cursor.execute("""
+                INSERT INTO ciclos (projeto_id, titulo, tipo, aberto, data_criacao, ordem)
+                VALUES (?, ?, ?, 1, ?, ?)
+            """, (projeto_id, str(titulo).strip(), tipo, agora, ordem))
+            conn.commit()
+            return cursor.lastrowid
+    except Exception as e:
+        print(f"Erro ao criar ciclo: {e}")
+        return None
+
+
+def renomear_ciclo(ciclo_id, novo_titulo):
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE ciclos SET titulo = ? WHERE id = ? AND aberto = 1",
+                (str(novo_titulo).strip(), ciclo_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+    except Exception as e:
+        print(f"Erro ao renomear ciclo: {e}")
+        return False
+
+
+def atualizar_ciclo(ciclo_id, titulo=None, tipo=None):
+    """Atualiza título e/ou tipo de um ciclo aberto."""
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            if titulo is not None:
+                cursor.execute(
+                    "UPDATE ciclos SET titulo = ? WHERE id = ? AND aberto = 1",
+                    (str(titulo).strip(), ciclo_id),
+                )
+            if tipo is not None and tipo in TIPOS_CICLO:
+                cursor.execute(
+                    "UPDATE ciclos SET tipo = ? WHERE id = ? AND aberto = 1",
+                    (tipo, ciclo_id),
+                )
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"Erro ao atualizar ciclo: {e}")
+        return False
+
+
+def excluir_ciclo(ciclo_id):
+    """
+    Remove a aba: apaga lançamentos do ciclo e marca como fechado.
+    Não envia para histórico (diferente de fechar medição).
+    """
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM lancamentos WHERE ciclo_id = ?", (ciclo_id,))
+            cursor.execute("UPDATE ciclos SET aberto = 0 WHERE id = ?", (ciclo_id,))
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"Erro ao excluir ciclo: {e}")
+        return False
+
+
+def obter_ou_criar_ciclo_padrao(nome_projeto="PROJETO AEV"):
+    """
+    Retorna o id do primeiro ciclo aberto do projeto.
+    Se não houver nenhum, cria um ciclo 'Medição' e retorna o id.
+    Usado para manter compatibilidade enquanto a UI de abas não está ativa.
+    """
+    ciclos = listar_ciclos_abertos(nome_projeto)
+    if ciclos:
+        return ciclos[0]["id"]
+    return criar_ciclo(nome_projeto, TIPO_NOVA_MEDICAO, "Medição")
+
 def carregar_fornecedores():
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
@@ -257,10 +521,17 @@ def carregar_fornecedores():
         return [{k: (v if v is not None else "") for k, v in dict(row).items()} for row in cursor.fetchall()]
 
 def adicionar_fornecedor(dados):
-    """Valida e adiciona um novo fornecedor no banco de dados."""
+    """
+    Valida e adiciona um novo fornecedor.
+    Retorna (sucesso: bool, mensagem_erro: str). mensagem_erro vazia se ok.
+    """
     if not dados or len(dados) < 3 or not dados[0] or not dados[2]:
-        print("Erro: Razão Social e CNPJ/CPF são obrigatórios.")
-        return False
+        return False, (
+            "Não foi possível cadastrar o prestador.\n\n"
+            "Verifique se:\n"
+            "• O campo Razão Social está preenchido\n"
+            "• O campo CNPJ/CPF está preenchido"
+        )
 
     razao_social = str(dados[0]).strip()
     cnpj_cpf = str(dados[2]).strip()
@@ -268,8 +539,35 @@ def adicionar_fornecedor(dados):
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT 1 FROM fornecedores WHERE razao_social = ? COLLATE NOCASE LIMIT 1",
+                (razao_social,),
+            )
+            if cursor.fetchone():
+                return False, (
+                    "Não foi possível cadastrar o prestador.\n\n"
+                    f"Já existe um cadastro com a Razão Social:\n« {razao_social} »\n\n"
+                    "Verifique se:\n"
+                    "• Esse prestador já não está na lista\n"
+                    "• O nome não foi digitado com pequena diferença (acento, espaço)"
+                )
+
+            cursor.execute(
+                "SELECT 1 FROM fornecedores WHERE cnpj_cpf = ? LIMIT 1",
+                (cnpj_cpf,),
+            )
+            if cursor.fetchone():
+                return False, (
+                    "Não foi possível cadastrar o prestador.\n\n"
+                    f"Já existe um cadastro com o CNPJ/CPF:\n« {cnpj_cpf} »\n\n"
+                    "Verifique se:\n"
+                    "• Esse prestador já não está cadastrado\n"
+                    "• O CNPJ/CPF foi digitado corretamente"
+                )
+
             cursor.execute("""
-            INSERT INTO fornecedores 
+            INSERT INTO fornecedores
             (razao_social, razao_fantasia, cnpj_cpf, banco, agencia, conta, tipo_pix, chave_pix)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
@@ -283,49 +581,112 @@ def adicionar_fornecedor(dados):
                 str(dados[7]).strip() if dados[7] else ""
             ))
             conn.commit()
-            return True
-    except sqlite3.IntegrityError as e:
-        print(f"Erro de Integridade: Razão Social ou CNPJ já cadastrado ({e}).")
-        return False
+            return True, ""
+    except sqlite3.IntegrityError:
+        return False, (
+            "Não foi possível cadastrar o prestador.\n\n"
+            "Razão Social ou CNPJ/CPF já cadastrado.\n\n"
+            "Verifique se esse prestador já existe na lista."
+        )
     except Exception as e:
         print(f"Erro ao adicionar fornecedor: {e}")
-        return False
+        return False, (
+            "Não foi possível cadastrar o prestador.\n\n"
+            "Verifique se:\n"
+            "• O banco de dados não está em uso por outro programa\n"
+            "• Você tem permissão de escrita na pasta do sistema\n\n"
+            f"Detalhe técnico: {e}"
+        )
+
 
 def atualizar_fornecedor(cnpj_original, dados):
-    """Atualiza um fornecedor existente filtrando pelo CNPJ/CPF original."""
+    """
+    Atualiza fornecedor existente.
+    Retorna (sucesso: bool, mensagem_erro: str).
+    """
     if not dados or len(dados) < 3 or not dados[0] or not dados[2]:
-        return False
+        return False, (
+            "Não foi possível atualizar o prestador.\n\n"
+            "Verifique se Razão Social e CNPJ/CPF estão preenchidos."
+        )
 
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
+            nova_razao = str(dados[0]).strip()
+            novo_cnpj = str(dados[2]).strip()
+            cnpj_orig = str(cnpj_original).strip()
+
+            cursor.execute(
+                """
+                SELECT 1 FROM fornecedores
+                WHERE razao_social = ? COLLATE NOCASE AND cnpj_cpf != ?
+                LIMIT 1
+                """,
+                (nova_razao, cnpj_orig),
+            )
+            if cursor.fetchone():
+                return False, (
+                    "Não foi possível atualizar o prestador.\n\n"
+                    f"Já existe outro cadastro com a Razão Social:\n« {nova_razao} »"
+                )
+
+            cursor.execute(
+                """
+                SELECT 1 FROM fornecedores
+                WHERE cnpj_cpf = ? AND cnpj_cpf != ?
+                LIMIT 1
+                """,
+                (novo_cnpj, cnpj_orig),
+            )
+            if cursor.fetchone():
+                return False, (
+                    "Não foi possível atualizar o prestador.\n\n"
+                    f"Já existe outro cadastro com o CNPJ/CPF:\n« {novo_cnpj} »"
+                )
+
             cursor.execute("""
             UPDATE fornecedores SET
                 razao_social = ?, razao_fantasia = ?, cnpj_cpf = ?,
                 banco = ?, agencia = ?, conta = ?, tipo_pix = ?, chave_pix = ?
             WHERE cnpj_cpf = ?
             """, (
-                str(dados[0]).strip(),
+                nova_razao,
                 str(dados[1]).strip() if dados[1] else "",
-                str(dados[2]).strip(),
+                novo_cnpj,
                 str(dados[3]).strip() if dados[3] else "",
                 str(dados[4]).strip() if dados[4] else "",
                 str(dados[5]).strip() if dados[5] else "",
                 str(dados[6]).strip() if dados[6] else "",
                 str(dados[7]).strip() if dados[7] else "",
-                str(cnpj_original).strip()
+                cnpj_orig,
             ))
             conn.commit()
-            return cursor.rowcount > 0
-    except sqlite3.IntegrityError as e:
-        print(f"Erro de duplicidade ao atualizar fornecedor: {e}")
-        return False
+            if cursor.rowcount > 0:
+                return True, ""
+            return False, (
+                "Não foi possível atualizar o prestador.\n\n"
+                "O registro original não foi encontrado.\n"
+                "Tente selecionar o prestador novamente na lista."
+            )
+    except sqlite3.IntegrityError:
+        return False, (
+            "Não foi possível atualizar o prestador.\n\n"
+            "Razão Social ou CNPJ/CPF conflita com outro cadastro já existente."
+        )
     except Exception as e:
         print(f"Erro ao atualizar fornecedor: {e}")
-        return False
+        return False, (
+            "Não foi possível atualizar o prestador.\n\n"
+            f"Detalhe técnico: {e}"
+        )
 
-def carregar_lancamentos(nome_projeto="PROJETO AEV", apenas_ciclo_ativo=True):
-    """Carrega lançamentos. Por padrão exibe só o ciclo atual (valor_a_pagar > 0)."""
+def carregar_lancamentos(nome_projeto="PROJETO AEV", apenas_ciclo_ativo=True, ciclo_id=None):
+    """
+    Carrega lançamentos do projeto.
+    - Se ciclo_id for informado: só daquele ciclo.
+    - Se apenas_ciclo_ativo e sem ciclo_id: usa o primeiro ciclo aberto (compatibilidade).
+    """
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -336,129 +697,234 @@ def carregar_lancamentos(nome_projeto="PROJETO AEV", apenas_ciclo_ativo=True):
         WHERE p.nome = ?
         """
         params = [nome_projeto]
-        if apenas_ciclo_ativo:
-            query += " AND l.valor_a_pagar > 0"
+
+        if ciclo_id is not None:
+            query += " AND l.ciclo_id = ?"
+            params.append(ciclo_id)
+        elif apenas_ciclo_ativo:
+            # Compatibilidade: restringe ao primeiro ciclo aberto do projeto
+            cid = obter_ou_criar_ciclo_padrao(nome_projeto)
+            if cid:
+                query += " AND l.ciclo_id = ?"
+                params.append(cid)
+
         query += " ORDER BY l.id ASC"
         cursor.execute(query, params)
         return [{k: (v if v is not None else "") for k, v in dict(row).items()} for row in cursor.fetchall()]
 
-def buscar_lancamento_por_pc(pc, nome_projeto="PROJETO AEV"):
-    """Busca um lançamento pelo PC, inclusive os de ciclos anteriores (saldo em aberto)."""
+
+def buscar_lancamento_por_pc(pc, nome_projeto="PROJETO AEV", ciclo_id=None):
+    """Busca lançamento pelo PC. Se ciclo_id informado, restringe ao ciclo."""
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute(f"""
+        query = f"""
         SELECT {SELECT_LANCAMENTO_COLUNAS}
         FROM lancamentos l
         JOIN projetos p ON l.projeto_id = p.id
         WHERE p.nome = ? AND l.pc = ?
-        """, (nome_projeto, str(pc).strip()))
+        """
+        params = [nome_projeto, str(pc).strip()]
+        if ciclo_id is not None:
+            query += " AND l.ciclo_id = ?"
+            params.append(ciclo_id)
+        query += " ORDER BY l.id DESC LIMIT 1"
+        cursor.execute(query, params)
         row = cursor.fetchone()
         if not row:
             return None
         return {k: (v if v is not None else "") for k, v in dict(row).items()}
 
-def adicionar_lancamento(dados, nome_projeto="PROJETO AEV"):
-    """Insere ou reativa lançamento (se o PC já existir de ciclo anterior)."""
+
+def adicionar_lancamento(dados, nome_projeto="PROJETO AEV", ciclo_id=None):
+    """
+    Insere lançamento no ciclo informado (ou no ciclo padrão aberto do projeto).
+    Retorna (sucesso: bool, mensagem_erro: str).
+    """
     dados_limpos = _tratar_dados_lancamento(dados)
     if not dados_limpos[0]:
-        print("Erro de validação DB: Código PC é obrigatório.")
-        return False
+        return False, (
+            "Não foi possível salvar o lançamento.\n\n"
+            "Verifique se:\n"
+            "• O campo PC está preenchido"
+        )
+
+    if ciclo_id is None:
+        ciclo_id = obter_ou_criar_ciclo_padrao(nome_projeto)
+    if not ciclo_id:
+        return False, (
+            "Não foi possível salvar o lançamento.\n\n"
+            "Não há aba/ciclo ativo neste projeto.\n"
+            "Crie uma nova aba ou selecione um projeto com medição aberta."
+        )
 
     pc = dados_limpos[0]
-    existente = buscar_lancamento_por_pc(pc, nome_projeto)
+    existente = buscar_lancamento_por_pc(pc, nome_projeto, ciclo_id=ciclo_id)
     if existente:
-        return atualizar_lancamento(pc, dados, nome_projeto)
+        return atualizar_lancamento(pc, dados, nome_projeto, ciclo_id=ciclo_id)
 
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id FROM projetos WHERE nome = ?", (nome_projeto,))
-            res = cursor.fetchone()
-            if not res:
-                print(f"Erro de validação DB: Projeto '{nome_projeto}' não encontrado.")
-                return False
-            projeto_id = res[0]
+            projeto_id = _obter_projeto_id(cursor, nome_projeto)
+            if not projeto_id:
+                return False, (
+                    "Não foi possível salvar o lançamento.\n\n"
+                    f"O projeto « {nome_projeto} » não foi encontrado no sistema."
+                )
 
             cursor.execute("""
             INSERT INTO lancamentos (
-                projeto_id, pc, prestador, atividade, valor_total, valor_liquido, valores_pagos,
+                projeto_id, ciclo_id, pc, prestador, atividade, valor_total, valor_liquido, valores_pagos,
                 saldo_a_pagar, valor_a_pagar, saldo_aberto, status_pc, oc, end_id, nota_fiscal, regional
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (projeto_id, *dados_limpos))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (projeto_id, ciclo_id, *dados_limpos))
             conn.commit()
-            return True
-    except sqlite3.IntegrityError as e:
-        print(f"Erro de integridade DB ao adicionar lançamento: {e}")
-        return False
+            return True, ""
+    except sqlite3.IntegrityError:
+        return False, (
+            "Não foi possível salvar o lançamento.\n\n"
+            f"Já pode existir um lançamento com o PC « {pc} » nesta aba.\n\n"
+            "Verifique se:\n"
+            "• O PC não está duplicado nesta medição\n"
+            "• Você não está em outra aba do mesmo projeto"
+        )
     except Exception as e:
         print(f"Erro ao adicionar lançamento: {e}")
-        return False
+        return False, (
+            "Não foi possível salvar o lançamento.\n\n"
+            "Verifique se:\n"
+            "• O banco de dados não está em uso por outro programa\n"
+            "• Há espaço em disco e permissão de escrita\n\n"
+            f"Detalhe técnico: {e}"
+        )
 
-def atualizar_lancamento(pc_original, dados_atualizados, nome_projeto="PROJETO AEV"):
-    """Atualiza lançamento com rollback em caso de falha."""
+
+def atualizar_lancamento(pc_original, dados_atualizados, nome_projeto="PROJETO AEV", ciclo_id=None):
+    """
+    Atualiza lançamento. Se ciclo_id informado, restringe ao ciclo.
+    Retorna (sucesso: bool, mensagem_erro: str).
+    """
     dados_limpos = _tratar_dados_lancamento(dados_atualizados)
     novo_pc = dados_limpos[0]
     if not novo_pc:
-        return False
+        return False, (
+            "Não foi possível atualizar o lançamento.\n\n"
+            "Verifique se o campo PC está preenchido."
+        )
 
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id FROM projetos WHERE nome = ?", (nome_projeto,))
-            res = cursor.fetchone()
-            if not res:
-                return False
-            projeto_id = res[0]
+            projeto_id = _obter_projeto_id(cursor, nome_projeto)
+            if not projeto_id:
+                return False, (
+                    "Não foi possível atualizar o lançamento.\n\n"
+                    f"O projeto « {nome_projeto} » não foi encontrado."
+                )
 
-            cursor.execute("""
-            UPDATE lancamentos SET
-                pc=?, prestador=?, atividade=?, valor_total=?, valor_liquido=?, valores_pagos=?,
-                saldo_a_pagar=?, valor_a_pagar=?, saldo_aberto=?, status_pc=?, oc=?, end_id=?,
-                nota_fiscal=?, regional=?
-            WHERE pc=? AND projeto_id=?
-            """, (*dados_limpos, str(pc_original).strip(), projeto_id))
-            
-            if cursor.rowcount == 0:
+            if ciclo_id is not None:
+                cursor.execute("""
+                UPDATE lancamentos SET
+                    pc=?, prestador=?, atividade=?, valor_total=?, valor_liquido=?, valores_pagos=?,
+                    saldo_a_pagar=?, valor_a_pagar=?, saldo_aberto=?, status_pc=?, oc=?, end_id=?,
+                    nota_fiscal=?, regional=?
+                WHERE pc=? AND projeto_id=? AND ciclo_id=?
+                """, (*dados_limpos, str(pc_original).strip(), projeto_id, ciclo_id))
+            else:
                 cursor.execute("""
                 UPDATE lancamentos SET
                     pc=?, prestador=?, atividade=?, valor_total=?, valor_liquido=?, valores_pagos=?,
                     saldo_a_pagar=?, valor_a_pagar=?, saldo_aberto=?, status_pc=?, oc=?, end_id=?,
                     nota_fiscal=?, regional=?
                 WHERE pc=? AND projeto_id=?
-                """, (*dados_limpos, str(novo_pc).strip(), projeto_id))
+                """, (*dados_limpos, str(pc_original).strip(), projeto_id))
+
+                if cursor.rowcount == 0:
+                    cursor.execute("""
+                    UPDATE lancamentos SET
+                        pc=?, prestador=?, atividade=?, valor_total=?, valor_liquido=?, valores_pagos=?,
+                        saldo_a_pagar=?, valor_a_pagar=?, saldo_aberto=?, status_pc=?, oc=?, end_id=?,
+                        nota_fiscal=?, regional=?
+                    WHERE pc=? AND projeto_id=?
+                    """, (*dados_limpos, str(novo_pc).strip(), projeto_id))
 
             conn.commit()
-            return cursor.rowcount > 0
-    except sqlite3.IntegrityError as e:
-        print(f"Erro de integridade DB ao atualizar lançamento: {e}")
-        return False
+            if cursor.rowcount > 0:
+                return True, ""
+            return False, (
+                "Não foi possível atualizar o lançamento.\n\n"
+                f"O PC « {pc_original} » não foi encontrado nesta aba/projeto.\n\n"
+                "Verifique se:\n"
+                "• Você está na aba correta\n"
+                "• O lançamento não foi excluído ou fechado"
+            )
+    except sqlite3.IntegrityError:
+        return False, (
+            "Não foi possível atualizar o lançamento.\n\n"
+            "Há conflito de dados (possível PC duplicado nesta aba)."
+        )
     except Exception as e:
         print(f"Erro ao atualizar lançamento: {e}")
-        return False
+        return False, (
+            "Não foi possível atualizar o lançamento.\n\n"
+            "Verifique se o banco de dados não está em uso por outro programa.\n\n"
+            f"Detalhe técnico: {e}"
+        )
 
-def deletar_lancamento(pc, nome_projeto="PROJETO AEV"):
+
+def deletar_lancamento(pc, nome_projeto="PROJETO AEV", ciclo_id=None):
+    """Retorna (sucesso: bool, mensagem_erro: str)."""
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-            DELETE FROM lancamentos 
-            WHERE pc = ? AND projeto_id = (SELECT id FROM projetos WHERE nome = ?)
-            """, (str(pc).strip(), nome_projeto))
+            if ciclo_id is not None:
+                cursor.execute("""
+                DELETE FROM lancamentos
+                WHERE pc = ? AND ciclo_id = ?
+                  AND projeto_id = (SELECT id FROM projetos WHERE nome = ?)
+                """, (str(pc).strip(), ciclo_id, nome_projeto))
+            else:
+                cursor.execute("""
+                DELETE FROM lancamentos
+                WHERE pc = ? AND projeto_id = (SELECT id FROM projetos WHERE nome = ?)
+                """, (str(pc).strip(), nome_projeto))
             conn.commit()
-            return cursor.rowcount > 0
+            if cursor.rowcount > 0:
+                return True, ""
+            return False, (
+                "Não foi possível excluir o lançamento.\n\n"
+                f"O PC « {pc} » não foi encontrado nesta aba/projeto.\n\n"
+                "Verifique se você está na aba correta ou se o registro já foi removido."
+            )
     except Exception as e:
         print(f"Erro ao deletar lançamento: {e}")
-        return False
+        return False, (
+            "Não foi possível excluir o lançamento.\n\n"
+            "Verifique se o banco de dados não está em uso por outro programa.\n\n"
+            f"Detalhe técnico: {e}"
+        )
 
-def exportar_planilha_medicao(caminho_saida="MEDICAO_FINANCEIRO.xlsx", nome_projeto="PROJETO AEV"):
+def exportar_planilha_medicao(caminho_saida="MEDICAO_FINANCEIRO.xlsx", nome_projeto="PROJETO AEV", ciclo_id=None):
+    """
+    Exporta a planilha financeira do ciclo.
+    Retorna (sucesso: bool, mensagem_erro: str).
+    """
     try:
         # Usa o caminho do template com get_resource_path
         template_path = get_resource_path(EXCEL_TEMPLATE)
         
         if not os.path.exists(template_path):
             print(f"Template {EXCEL_TEMPLATE} não encontrado em: {template_path}")
-            return False
+            return False, (
+                "Não foi possível gerar a planilha.\n\n"
+                "Verifique se:\n"
+                f"• O arquivo modelo « {EXCEL_TEMPLATE} » está na pasta do sistema\n"
+                "• A instalação do programa não está incompleta"
+            )
+
+        if ciclo_id is None:
+            ciclo_id = obter_ou_criar_ciclo_padrao(nome_projeto)
         
         wb = openpyxl.load_workbook(template_path)
         
@@ -498,9 +964,9 @@ def exportar_planilha_medicao(caminho_saida="MEDICAO_FINANCEIRO.xlsx", nome_proj
                        l.nota_fiscal, l.regional
                 FROM lancamentos l
                 JOIN projetos p ON l.projeto_id = p.id
-                WHERE p.nome = ? AND l.valor_a_pagar > 0
+                WHERE p.nome = ? AND l.ciclo_id = ? AND l.valor_a_pagar > 0
                 ORDER BY l.id ASC
-                """, (nome_projeto,))
+                """, (nome_projeto, ciclo_id))
                 lancamentos = cursor.fetchall()
 
                 linha_inicio = 3
@@ -550,10 +1016,11 @@ def exportar_planilha_medicao(caminho_saida="MEDICAO_FINANCEIRO.xlsx", nome_proj
                     GROUP_CONCAT(DISTINCT NULLIF(TRIM(l.nota_fiscal), '')) AS nfs
                 FROM lancamentos l
                 JOIN projetos p ON l.projeto_id = p.id
-                WHERE p.nome = ? AND l.valor_a_pagar > 0 AND l.prestador IS NOT NULL AND l.prestador != ''
+                WHERE p.nome = ? AND l.ciclo_id = ? AND l.valor_a_pagar > 0
+                  AND l.prestador IS NOT NULL AND l.prestador != ''
                 GROUP BY l.prestador
                 ORDER BY MIN(l.id) ASC
-                """, (nome_projeto,))
+                """, (nome_projeto, ciclo_id))
                 prestadores_pagamento = cursor.fetchall()
 
                 linha_inicio_tela = 3
@@ -616,23 +1083,87 @@ def exportar_planilha_medicao(caminho_saida="MEDICAO_FINANCEIRO.xlsx", nome_proj
                 if "Print_Area" in ws_tela.defined_names:
                     del ws_tela.defined_names["Print_Area"]
 
-        wb.save(caminho_saida)
-        return True
+        try:
+            wb.save(caminho_saida)
+        except PermissionError:
+            return False, (
+                "Não foi possível salvar a planilha.\n\n"
+                "Verifique se:\n"
+                "• O arquivo não está aberto no Excel (ou outro programa)\n"
+                "• Você fechou a planilha antes de exportar de novo\n"
+                "• A pasta de destino permite gravação\n"
+                "• O arquivo não está marcado como somente leitura"
+            )
+        except OSError as e:
+            # Windows: arquivo em uso costuma vir como OSError / WinError 32
+            erro_txt = str(e).lower()
+            if "permission" in erro_txt or "being used" in erro_txt or "em uso" in erro_txt or getattr(e, "winerror", None) == 32:
+                return False, (
+                    "Não foi possível salvar a planilha.\n\n"
+                    "O arquivo parece estar aberto ou bloqueado.\n\n"
+                    "Verifique se:\n"
+                    "• A planilha não está aberta no Excel\n"
+                    "• Você fechou o arquivo e tentou exportar novamente\n"
+                    "• Escolheu outro nome/local se precisar manter a versão antiga aberta"
+                )
+            return False, (
+                "Não foi possível salvar a planilha.\n\n"
+                "Verifique se:\n"
+                "• O caminho de destino é válido\n"
+                "• Há espaço em disco e permissão de escrita\n\n"
+                f"Detalhe técnico: {e}"
+            )
+
+        return True, ""
+    except PermissionError:
+        return False, (
+            "Não foi possível salvar a planilha.\n\n"
+            "Verifique se o arquivo não está aberto no Excel e tente novamente."
+        )
     except Exception as e:
         print(f"Erro ao exportar planilha para o Financeiro: {e}")
-        return False
+        erro_txt = str(e).lower()
+        if "permission" in erro_txt or "being used" in erro_txt or getattr(e, "winerror", None) == 32:
+            return False, (
+                "Não foi possível salvar a planilha.\n\n"
+                "Verifique se:\n"
+                "• O arquivo não está aberto no Excel\n"
+                "• Você fechou a planilha antes de sobrescrever"
+            )
+        return False, (
+            "Não foi possível gerar a planilha.\n\n"
+            "Verifique se:\n"
+            "• O template do sistema está disponível\n"
+            "• Há lançamentos no ciclo atual\n"
+            "• O destino escolhido permite gravação\n\n"
+            f"Detalhe técnico: {e}"
+        )
 
-def fechar_e_consolidar_medicao(caminho_exportacao, nome_projeto="PROJETO AEV"):
+def fechar_e_consolidar_medicao(caminho_exportacao, nome_projeto="PROJETO AEV", ciclo_id=None):
     """
-    Consolida o ciclo de medição do projeto:
-    1. Gera a planilha Excel do período.
-    2. Transfere os dados atuais para o histórico.
-    3. Atualiza os saldos nos lançamentos para a próxima medição.
+    Consolida um ciclo de medição:
+    1. Gera a planilha Excel do período (só do ciclo).
+    2. Transfere os dados do ciclo para o histórico (com tipo_ciclo).
+    3. Atualiza os saldos dos lançamentos daquele ciclo.
+    4. Marca o ciclo como fechado (aberto = 0).
     """
-    sucesso_exportacao = exportar_planilha_medicao(caminho_exportacao, nome_projeto)
+    if ciclo_id is None:
+        ciclo_id = obter_ou_criar_ciclo_padrao(nome_projeto)
+    if not ciclo_id:
+        return False, (
+            "Não foi possível fechar a medição.\n\n"
+            "Não há ciclo/aba aberta neste projeto."
+        )
+
+    sucesso_exportacao, msg_export = exportar_planilha_medicao(
+        caminho_exportacao, nome_projeto, ciclo_id=ciclo_id
+    )
     if not sucesso_exportacao:
-        print("Erro: A exportação falhou. O ciclo de medição não foi alterado.")
-        return False
+        return False, (
+            "Não foi possível fechar a medição porque a planilha não pôde ser salva.\n"
+            "Nenhum dado do banco foi alterado.\n\n"
+            + (msg_export or "Tente fechar o arquivo no Excel e repetir.")
+        )
 
     try:
         with get_connection() as conn:
@@ -641,38 +1172,43 @@ def fechar_e_consolidar_medicao(caminho_exportacao, nome_projeto="PROJETO AEV"):
             from datetime import datetime
             mes_ref = datetime.now().strftime("%m/%Y")
             data_fechamento = datetime.now().strftime("%d/%m/%Y")
-            
+
+            # Tipo do ciclo para o histórico
+            cursor.execute("SELECT tipo FROM ciclos WHERE id = ?", (ciclo_id,))
+            row_tipo = cursor.fetchone()
+            tipo_ciclo = row_tipo[0] if row_tipo else TIPO_NOVA_MEDICAO
+
             cursor.execute("""
-            INSERT INTO historico_medicoes 
+            INSERT INTO historico_medicoes
             (projeto_id, data_fechamento, mes_referencia, pc, prestador, atividade,
              valor_total, valor_liquido, valores_pagos, saldo_a_pagar, valor_a_pagar, saldo_aberto,
-             status_pc, oc, end_id, nota_fiscal, regional, valor_medido, status)
-            SELECT 
+             status_pc, oc, end_id, nota_fiscal, regional, valor_medido, status, tipo_ciclo)
+            SELECT
                 p.id, ?, ?, l.pc, l.prestador, l.atividade,
                 l.valor_total, l.valor_liquido, l.valores_pagos, l.saldo_a_pagar, l.valor_a_pagar, l.saldo_aberto,
-                l.status_pc, l.oc, l.end_id, l.nota_fiscal, l.regional, l.valor_a_pagar, l.status_pc
+                l.status_pc, l.oc, l.end_id, l.nota_fiscal, l.regional, l.valor_a_pagar, l.status_pc, ?
             FROM lancamentos l
             JOIN projetos p ON l.projeto_id = p.id
-            WHERE p.nome = ? AND l.valor_a_pagar > 0
-            """, (data_fechamento, mes_ref, nome_projeto))
-            
+            WHERE p.nome = ? AND l.ciclo_id = ? AND l.valor_a_pagar > 0
+            """, (data_fechamento, mes_ref, tipo_ciclo, nome_projeto, ciclo_id))
+
             cursor.execute("""
             SELECT l.id, l.valor_total, l.valores_pagos, l.valor_a_pagar
             FROM lancamentos l
             JOIN projetos p ON l.projeto_id = p.id
-            WHERE p.nome = ?
-            """, (nome_projeto,))
-            
+            WHERE p.nome = ? AND l.ciclo_id = ?
+            """, (nome_projeto, ciclo_id))
+
             registros = cursor.fetchall()
-            
+
             for reg in registros:
                 l_id, v_total, v_pagos, v_a_pagar = reg
-                
+
                 novos_pagos = (v_pagos or 0.0) + (v_a_pagar or 0.0)
                 novo_saldo_a_pagar = max(0.0, (v_total or 0.0) - novos_pagos)
                 novo_valor_a_pagar = 0.0
                 novo_saldo_aberto = novo_saldo_a_pagar
-                
+
                 cursor.execute("""
                 UPDATE lancamentos SET
                     valores_pagos = ?,
@@ -681,42 +1217,86 @@ def fechar_e_consolidar_medicao(caminho_exportacao, nome_projeto="PROJETO AEV"):
                     saldo_aberto = ?
                 WHERE id = ?
                 """, (novos_pagos, novo_saldo_a_pagar, novo_valor_a_pagar, novo_saldo_aberto, l_id))
-                
+
+            # Marca o ciclo como fechado
+            cursor.execute("UPDATE ciclos SET aberto = 0 WHERE id = ?", (ciclo_id,))
+
             conn.commit()
-            return True
+            return True, ""
     except Exception as e:
         print(f"Erro ao consolidar medição no banco de dados: {e}")
-        return False
+        return False, (
+            "A planilha foi gerada, mas houve erro ao consolidar no banco.\n\n"
+            "Verifique se o banco de dados não está em uso por outro programa.\n\n"
+            f"Detalhe técnico: {e}"
+        )
 
 
-def limpar_lancamentos_projeto(nome_projeto="PROJETO AEV"):
+def limpar_lancamentos_projeto(nome_projeto="PROJETO AEV", ciclo_id=None):
     """
-    Remove todos os lançamentos do projeto ativo.
-    Mantém intactos a tabela de fornecedores e o cadastro do projeto no banco.
+    Remove lançamentos do projeto.
+    Se ciclo_id informado: só daquele ciclo (e fecha o ciclo).
+    Caso contrário: todos os lançamentos e ciclos abertos do projeto.
+    Retorna (sucesso: bool, mensagem_erro: str).
     """
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-            DELETE FROM lancamentos 
-            WHERE projeto_id = (SELECT id FROM projetos WHERE nome = ?)
-            """, (nome_projeto,))
-            
+            projeto_id = _obter_projeto_id(cursor, nome_projeto)
+            if not projeto_id:
+                return False, (
+                    "Não foi possível limpar os lançamentos.\n\n"
+                    f"O projeto « {nome_projeto} » não foi encontrado."
+                )
+
+            if ciclo_id is not None:
+                cursor.execute(
+                    "DELETE FROM lancamentos WHERE projeto_id = ? AND ciclo_id = ?",
+                    (projeto_id, ciclo_id),
+                )
+                cursor.execute(
+                    "UPDATE ciclos SET aberto = 0 WHERE id = ?",
+                    (ciclo_id,),
+                )
+            else:
+                cursor.execute(
+                    "DELETE FROM lancamentos WHERE projeto_id = ?",
+                    (projeto_id,),
+                )
+                cursor.execute(
+                    "UPDATE ciclos SET aberto = 0 WHERE projeto_id = ? AND aberto = 1",
+                    (projeto_id,),
+                )
+
             conn.commit()
-            return True
+            return True, ""
     except Exception as e:
         print(f"Erro ao limpar lançamentos do projeto '{nome_projeto}': {e}")
-        return False
+        return False, (
+            "Não foi possível limpar os lançamentos.\n\n"
+            "Verifique se:\n"
+            "• O banco de dados não está em uso por outro programa\n"
+            "• Há permissão de escrita na pasta do sistema\n\n"
+            f"Detalhe técnico: {e}"
+        )
 
-def carregar_historico_medicoes(nome_projeto="PROJETO AEV", mes_referencia=None):
-    """Carrega a lista de medições fechadas do projeto"""
+def rotulo_tipo_ciclo(tipo):
+    """Nome amigável do tipo de ciclo para exibição."""
+    if not tipo:
+        return "Medição"
+    return TIPOS_CICLO.get(tipo, "Medição")
+
+
+def carregar_historico_medicoes(nome_projeto="PROJETO AEV", mes_referencia=None, tipo_ciclo=None):
+    """Carrega a lista de medições fechadas do projeto, agrupadas por data + tipo."""
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        
+
         query = """
-        SELECT 
+        SELECT
             data_fechamento,
+            COALESCE(tipo_ciclo, 'NOVA_MEDICAO') AS tipo_ciclo,
             SUM(valor_medido) as total_pago,
             COUNT(*) as quantidade_pcs
         FROM historico_medicoes h
@@ -724,24 +1304,32 @@ def carregar_historico_medicoes(nome_projeto="PROJETO AEV", mes_referencia=None)
         WHERE p.nome = ?
         """
         params = [nome_projeto]
-        
+
         if mes_referencia:
             query += " AND h.mes_referencia = ?"
             params.append(mes_referencia)
-            
-        query += " GROUP BY data_fechamento ORDER BY data_fechamento DESC"
-        
+
+        if tipo_ciclo:
+            query += " AND COALESCE(h.tipo_ciclo, 'NOVA_MEDICAO') = ?"
+            params.append(tipo_ciclo)
+
+        query += """
+            GROUP BY data_fechamento, COALESCE(tipo_ciclo, 'NOVA_MEDICAO')
+            ORDER BY data_fechamento DESC, tipo_ciclo ASC
+        """
+
         cursor.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
 
-def carregar_detalhes_medicao(data_fechamento, nome_projeto="PROJETO AEV"):
-    """Carrega os detalhes de uma medição específica incluindo os novos saldos do snapshot"""
+
+def carregar_detalhes_medicao(data_fechamento, nome_projeto="PROJETO AEV", tipo_ciclo=None):
+    """Carrega os detalhes de uma medição específica (data + tipo opcional)."""
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        
-        cursor.execute("""
-        SELECT 
+
+        query = """
+        SELECT
             h.pc AS "PC",
             h.prestador AS "PRESTADOR",
             COALESCE(h.atividade, '') AS "ATIVIDADE/SERVIÇO",
@@ -759,10 +1347,68 @@ def carregar_detalhes_medicao(data_fechamento, nome_projeto="PROJETO AEV"):
         FROM historico_medicoes h
         JOIN projetos p ON h.projeto_id = p.id
         WHERE p.nome = ? AND h.data_fechamento = ?
-        ORDER BY h.id ASC
-        """, (nome_projeto, data_fechamento))
-        
+        """
+        params = [nome_projeto, data_fechamento]
+        if tipo_ciclo:
+            query += " AND COALESCE(h.tipo_ciclo, 'NOVA_MEDICAO') = ?"
+            params.append(tipo_ciclo)
+        query += " ORDER BY h.id ASC"
+
+        cursor.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
+
+
+def carregar_estatisticas_por_tipo(nome_projeto="PROJETO AEV", tipo_ciclo=None, prestador_filtro=None):
+    """
+    Estatísticas a partir do histórico (pagamentos já fechados), filtráveis por tipo.
+    Útil para: quanto de emergencial, saldo final, etc.
+    """
+    with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        query_tot = """
+        SELECT
+            COALESCE(SUM(h.valor_medido), 0) AS total_pago,
+            COUNT(*) AS quantidade_pcs,
+            COUNT(DISTINCT h.data_fechamento) AS quantidade_fechamentos
+        FROM historico_medicoes h
+        JOIN projetos p ON h.projeto_id = p.id
+        WHERE p.nome = ?
+        """
+        params = [nome_projeto]
+        if tipo_ciclo:
+            query_tot += " AND COALESCE(h.tipo_ciclo, 'NOVA_MEDICAO') = ?"
+            params.append(tipo_ciclo)
+        if prestador_filtro:
+            query_tot += " AND h.prestador = ?"
+            params.append(prestador_filtro)
+
+        cursor.execute(query_tot, params)
+        totais = dict(cursor.fetchone())
+
+        query_prest = """
+        SELECT
+            h.prestador,
+            COALESCE(SUM(h.valor_medido), 0) AS pago,
+            COUNT(*) AS qtd_pcs
+        FROM historico_medicoes h
+        JOIN projetos p ON h.projeto_id = p.id
+        WHERE p.nome = ? AND h.prestador IS NOT NULL AND h.prestador != ''
+        """
+        params_p = [nome_projeto]
+        if tipo_ciclo:
+            query_prest += " AND COALESCE(h.tipo_ciclo, 'NOVA_MEDICAO') = ?"
+            params_p.append(tipo_ciclo)
+        if prestador_filtro:
+            query_prest += " AND h.prestador = ?"
+            params_p.append(prestador_filtro)
+        query_prest += " GROUP BY h.prestador ORDER BY pago DESC"
+
+        cursor.execute(query_prest, params_p)
+        prestadores = [dict(row) for row in cursor.fetchall()]
+
+        return {"totais": totais, "prestadores": prestadores}
 
 def carregar_meses_com_historico(nome_projeto="PROJETO AEV"):
     """Carrega os meses que têm medições fechadas"""

@@ -61,12 +61,22 @@ class TelaHistorico(QWidget):
         self.combo_mes = QComboBox()
         self.combo_mes.addItem("Todos")
         self.combo_mes.currentIndexChanged.connect(self.carregar_historico)
+
+        lbl_tipo = QLabel("Tipo:")
+        self.combo_tipo = QComboBox()
+        self.combo_tipo.addItem("Todos", None)
+        for key, label in database.TIPOS_CICLO.items():
+            self.combo_tipo.addItem(label, key)
+        self.combo_tipo.currentIndexChanged.connect(self.carregar_historico)
         
         layout_filtros.addWidget(lbl_projeto)
         layout_filtros.addWidget(self.combo_projeto)
-        layout_filtros.addSpacing(20)
+        layout_filtros.addSpacing(16)
         layout_filtros.addWidget(lbl_mes)
         layout_filtros.addWidget(self.combo_mes)
+        layout_filtros.addSpacing(16)
+        layout_filtros.addWidget(lbl_tipo)
+        layout_filtros.addWidget(self.combo_tipo)
         layout_filtros.addStretch()
         
         layout_lista.addWidget(frame_filtros)
@@ -74,7 +84,7 @@ class TelaHistorico(QWidget):
         # Lista de medições
         self.lista_medicoes = QTableWidget()
         self.lista_medicoes.setColumnCount(3)
-        self.lista_medicoes.setHorizontalHeaderLabels(["Medição", "Total da Medição", "Qtd. PCs"])
+        self.lista_medicoes.setHorizontalHeaderLabels(["Fechamento", "Total", "Qtd. PCs"])
         self.lista_medicoes.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.lista_medicoes.setEditTriggers(QTableWidget.NoEditTriggers)
         self.lista_medicoes.setSelectionBehavior(QTableWidget.SelectRows)
@@ -226,14 +236,20 @@ class TelaHistorico(QWidget):
                 self.combo_mes.setCurrentIndex(index)
         self.combo_mes.blockSignals(False)
         
+        tipo_filtro = self.combo_tipo.currentData()
+
         # Carrega medições
-        dados = database.carregar_historico_medicoes(projeto, mes_ref)
+        dados = database.carregar_historico_medicoes(projeto, mes_ref, tipo_ciclo=tipo_filtro)
         self.dados_histórico = dados
         
         self.lista_medicoes.setRowCount(0)
         for row_idx, item in enumerate(dados):
             self.lista_medicoes.insertRow(row_idx)
-            self.lista_medicoes.setItem(row_idx, 0, QTableWidgetItem(f"📅 Medição - {item['data_fechamento']}"))
+            rotulo = database.rotulo_tipo_ciclo(item.get("tipo_ciclo"))
+            self.lista_medicoes.setItem(
+                row_idx, 0,
+                QTableWidgetItem(f"📅 {rotulo} — {item['data_fechamento']}")
+            )
             self.lista_medicoes.setItem(row_idx, 1, QTableWidgetItem(utils.float_para_moeda(item['total_pago'])))
             self.lista_medicoes.setItem(row_idx, 2, QTableWidgetItem(str(item['quantidade_pcs'])))
     
@@ -244,15 +260,19 @@ class TelaHistorico(QWidget):
         
         item = self.dados_histórico[row]
         data_fechamento = item['data_fechamento']
+        tipo_ciclo = item.get("tipo_ciclo") or "NOVA_MEDICAO"
+        rotulo = database.rotulo_tipo_ciclo(tipo_ciclo)
         projeto = self.combo_projeto.currentText()
 
         self.lbl_titulo_medicao.setText(
-            f"Medição fechada em {data_fechamento} — {projeto} "
+            f"{rotulo} fechada em {data_fechamento} — {projeto} "
             f"({utils.float_para_moeda(item.get('total_pago', 0))} neste ciclo)"
         )
         
         # Carrega detalhes
-        detalhes = database.carregar_detalhes_medicao(data_fechamento, projeto)
+        detalhes = database.carregar_detalhes_medicao(
+            data_fechamento, projeto, tipo_ciclo=tipo_ciclo
+        )
         
         # Atualiza cards (baseado no Valor a Pagar do ciclo fechado)
         total_mob = sum(
