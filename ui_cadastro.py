@@ -93,18 +93,32 @@ class TelaCadastro(QWidget):
 
         layout_principal.addWidget(card_form)
 
-        # --- TABELA DE DADOS (TREEVIEW / QTABLEWIDGET) ---
+        # --- BUSCA NA LISTA ---
+        self.txt_busca = QLineEdit()
+        self.txt_busca.setPlaceholderText("🔍 Buscar por razão social, fantasia, CNPJ/CPF, banco...")
+        self.txt_busca.setStyleSheet("""
+            QLineEdit {
+                background-color: #0f172a;
+                color: #f8fafc;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 8px 12px;
+            }
+        """)
+        self.txt_busca.textChanged.connect(self.filtrar_tabela)
+        layout_principal.addWidget(self.txt_busca)
+
+        # --- TABELA DE DADOS ---
         self.tabela = QTableWidget()
         self.tabela.setColumnCount(8)
         self.tabela.setHorizontalHeaderLabels([
             "Razão Social", "Razão Fantasia", "CNPJ/CPF", "Banco", "Agência", "Conta", "Tipo PIX", "Chave PIX"
         ])
         self.tabela.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.tabela.setEditTriggers(QTableWidget.NoEditTriggers) # Impede edição direta na célula, força o clique duplo
+        self.tabela.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tabela.setSelectionBehavior(QTableWidget.SelectRows)
         self.tabela.doubleClicked.connect(self.ao_clicar_duplo)
-        
-        # Estilo escuro para a tabela
+
         self.tabela.setStyleSheet("""
             QTableWidget { background-color: #0f172a; color: #f8fafc; border: 1px solid #334155; }
             QHeaderView::section { background-color: #1e293b; color: white; padding: 5px; border: 1px solid #334155; }
@@ -131,16 +145,31 @@ class TelaCadastro(QWidget):
         """Puxa os dados do database.py e preenche a tabela"""
         fornecedores = database.carregar_fornecedores()
         self.tabela.setRowCount(0)
-        
+
         for row_idx, f in enumerate(fornecedores):
             self.tabela.insertRow(row_idx)
-            # Pega exatamente os 8 valores da nossa planilha
             valores = list(f.values())[:8]
             for col_idx, valor in enumerate(valores):
-                # Se for NaN ou None, converte para string vazia
                 val_str = str(valor) if valor not in [None, "nan"] else ""
                 item = QTableWidgetItem(val_str)
                 self.tabela.setItem(row_idx, col_idx, item)
+
+        self.filtrar_tabela()
+
+    def filtrar_tabela(self):
+        """Filtra a tabela pelo texto da busca (qualquer coluna)."""
+        termo = self.txt_busca.text().lower().strip()
+        for row in range(self.tabela.rowCount()):
+            if not termo:
+                self.tabela.setRowHidden(row, False)
+                continue
+            match = False
+            for col in range(self.tabela.columnCount()):
+                item = self.tabela.item(row, col)
+                if item and termo in item.text().lower():
+                    match = True
+                    break
+            self.tabela.setRowHidden(row, not match)
 
     def ao_clicar_duplo(self):
         """Joga os dados da linha selecionada para os campos de texto"""

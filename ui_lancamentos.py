@@ -7,8 +7,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 import database
-import utils 
+import utils
 from utils import str_para_float
+from pc_pdf_reader import importar_pc_medicao, match_prestador_cadastrado
 
 class TelaLancamentos(QWidget):
     def __init__(self):
@@ -400,17 +401,32 @@ class TelaLancamentos(QWidget):
         self.btn_excluir.clicked.connect(self.excluir_registro)
         self.btn_excluir.setVisible(False)
 
+        self.btn_importar_pc = QPushButton("📄 Importar PC (PDF)")
+        self.btn_importar_pc.setToolTip("Lê um PDF de medição e preenche o formulário")
+        self.btn_importar_pc.setStyleSheet("""
+            QPushButton {
+                background-color: #0f766e;
+                color: white;
+                font-weight: bold;
+                border-radius: 6px;
+                padding: 10px 15px;
+            }
+            QPushButton:hover { background-color: #0d9488; }
+        """)
+        self.btn_importar_pc.clicked.connect(self.importar_pc_pdf)
+
         self.btn_salvar = QPushButton("Salvar Lançamento")
         self.btn_salvar.clicked.connect(self.salvar_registro)
-        
+
         self.btn_fechar = QPushButton("Cancelar", objectName="btn_fechar")
         self.btn_fechar.clicked.connect(self.fechar_formulario)
-        
+
         layout_botoes.addWidget(self.btn_excluir)
+        layout_botoes.addWidget(self.btn_importar_pc)
         layout_botoes.addStretch()
         layout_botoes.addWidget(self.btn_fechar)
         layout_botoes.addWidget(self.btn_salvar)
-        
+
         grid.addLayout(layout_botoes, 4, 0, 1, 5)
 
         layout_principal.addWidget(self.frame_formulario)
@@ -1041,8 +1057,171 @@ class TelaLancamentos(QWidget):
 
         self.atualizar_cards(lancamentos_visiveis)
 
+    def importar_pc_pdf(self):
+        """Lê PDF de medição e preenche o formulário de novo lançamento."""
+        if not self.garantir_ciclo_ativo():
+            return
+
+        caminho, _ = QFileDialog.getOpenFileName(
+            self,
+            "Selecionar PDF do PC",
+            "",
+            "PDF (*.pdf)",
+        )
+        if not caminho:
+            return
+
+        try:
+            dados = importar_pc_medicao(caminho)
+        except ValueError as e:
+            QMessageBox.critical(self, "Erro na importação", str(e))
+            return
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Erro na importação",
+                "Não foi possível ler o PDF.\n\n"
+                "Verifique se:\n"
+                "• O arquivo não está aberto em outro programa\n"
+                "• É um PC de medição com texto (não só imagem digitalizada)\n\n"
+                f"Detalhe técnico: {e}",
+            )
+            return
+
+        # Novo lançamento (não força modo edição da linha atual)
+        self.pc_em_edicao = None
+        self.btn_excluir.setVisible(False)
+        self.btn_salvar.setText("Salvar Lançamento")
+
+        self.txt_pc.setText(dados.pc)
+        self.txt_oc.setText(dados.oc)
+        self.txt_end_id.setText(dados.end_id)
+        self.txt_atividade.setText(dados.atividade)
+        self.txt_regional.setText(dados.regional)
+        self.txt_valor_total.setText(
+            f"{dados.valor_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            if dados.valor_total
+            else ""
+        )
+        # Usuário informa pago / a pagar / status / NF
+        self.txt_valores_pagos.setText("0")
+        self.txt_valor_a_pagar.clear()
+        self.txt_nota_fiscal.clear()
+        self.radio_valor.setChecked(True)
+        self.radio_valor_pago.setChecked(True)
+        self.txt_valor_a_pagar.setPlaceholderText("Valor a Pagar (R$)")
+        self.txt_valores_pagos.setPlaceholderText("Valores Pagos (R$)")
+        self.lbl_preview_porcentagem.setVisible(False)
+
+        fornecedores = database.carregar_fornecedores()
+        match = match_prestador_cadastrado(
+            dados.razao_social, dados.fantasia, fornecedores
+        )
+        avisos = list(dados.warnings)
+        if match:
+            idx = self.combo_prestador.findText(match)
+            if idx >= 0:
+                self.combo_prestador.setCurrentIndex(idx)
+            else:
+                self.combo_prestador.setCurrentText(match)
+        else:
+            self.combo_prestador.setCurrentIndex(-1)
+            self.combo_prestador.setEditText("")
+            nome_pdf = dados.razao_social or dados.fantasia or "(não lido)"
+            avisos.append(
+                f"Prestador « {nome_pdf} » não encontrado no cadastro. "
+                "Cadastre-o em Cadastros ou selecione manualmente."
+            )
+
+        self.frame_formulario.setVisible(True)
+
+        msg = "Arquivo importado com sucesso.\n\nCheque os campos preenchidos!"
+        if avisos:
+            msg += "\n\nAtenção:\n• " + "\n• ".join(avisos)
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information if not avisos else QMessageBox.Warning)
+        box.setWindowTitle("Importação de PC")
+        box.setText(msg)
+        if not match and (dados.razao_social or dados.fantasia):
+            btn_cadastro = box.addButton("Ir para Cadastros", QMessageBox.ActionRole)
+            box.addButton("Continuar no lançamento", QMessageBox.AcceptRole)
+            box.exec()
+            if box.clickedButton() == btn_cadastro:
+                # Sinaliza para a janela principal trocar de tela, se existir
+                parent = self.window()
+                if hasattr(parent, "mudar_tela"):
+                    parent.mudar_tela(1)
+            return
+        box.exec()
+
+        # Após import: PC na mesma aba ou em outro ciclo
+        self.tentar_carregar_pc_existente()
+
+    def _aplicar_dados_pc_no_formulario(self, dados, modo_edicao=False, preencher_pagos=True):
+        """Preenche o formulário com dados de um PC (edição ou nova parcela)."""
+        prestador = utils.limpar_texto(dados.get("PRESTADOR", ""))
+        if prestador:
+            index = self.combo_prestador.findText(prestador)
+            if index >= 0:
+                self.combo_prestador.setCurrentIndex(index)
+            else:
+                self.combo_prestador.setCurrentText(prestador)
+
+        atividade = utils.limpar_texto(dados.get("ATIVIDADE/SERVIÇO", ""))
+        if atividade:
+            self.txt_atividade.setText(atividade)
+
+        total = utils.str_para_float(dados.get("VALOR TOTAL DO PC", 0))
+        if dados.get("VALOR TOTAL DO PC") not in (None, ""):
+            self.txt_valor_total.setText(str(dados.get("VALOR TOTAL DO PC", "")))
+
+        if preencher_pagos:
+            pagos = utils.str_para_float(dados.get("VALORES PAGOS", 0))
+            if total > 0 and pagos >= 0:
+                self.radio_porcentagem_pago.setChecked(True)
+                self.txt_valores_pagos.setPlaceholderText("Percentual já pago(%)")
+                self.txt_valores_pagos.setText(
+                    self._formatar_percentual_exibicao((pagos / total) * 100.0)
+                )
+            else:
+                self.radio_valor_pago.setChecked(True)
+                self.txt_valores_pagos.setPlaceholderText("Valores Pagos (R$)")
+                self.txt_valores_pagos.setText(str(dados.get("VALORES PAGOS", "0") or "0"))
+        self.txt_valor_a_pagar.clear()
+        self.radio_porcentagem.setChecked(True)
+        self.txt_valor_a_pagar.setPlaceholderText("Percentual a pagar(%)")
+
+        oc = utils.limpar_texto(dados.get("OC", ""))
+        if oc:
+            self.txt_oc.setText(oc)
+        end_id = utils.limpar_texto(dados.get("END ID", ""))
+        if end_id:
+            self.txt_end_id.setText(end_id)
+        regional = utils.limpar_texto(dados.get("REGIONAL", ""))
+        if regional:
+            self.txt_regional.setText(regional)
+
+        if modo_edicao:
+            nf = utils.limpar_texto(dados.get("NOTA FISCAL", ""))
+            if nf:
+                self.txt_nota_fiscal.setText(nf)
+            status = utils.limpar_texto(dados.get("STATUS PC", ""))
+            if status:
+                idx_status = self.combo_status.findText(status)
+                if idx_status >= 0:
+                    self.combo_status.setCurrentIndex(idx_status)
+
+        self.lbl_preview_porcentagem.setVisible(False)
+        if hasattr(self, "atualizar_preview_porcentagem"):
+            self.atualizar_preview_porcentagem()
+
     def tentar_carregar_pc_existente(self):
-        """Se o PC já existir neste ciclo, pré-preenche os dados."""
+        """
+        Ao informar um PC:
+        - Se já existe NESTA aba → pergunta se deseja editar.
+        - Se existe em OUTRO ciclo/histórico → pré-preenche base + valor já pago.
+        """
         if self.pc_em_edicao:
             return
 
@@ -1050,48 +1229,62 @@ class TelaLancamentos(QWidget):
         if not pc:
             return
 
-        existente = database.buscar_lancamento_por_pc(
-            pc, self.projeto_atual(), ciclo_id=self.ciclo_id_ativo
-        )
-        if not existente:
+        proj = self.projeto_atual()
+        ciclo = self.ciclo_id_ativo
+
+        # 1) Mesmo ciclo → confirmação antes de editar
+        existente_ciclo = database.buscar_lancamento_por_pc(pc, proj, ciclo_id=ciclo)
+        if existente_ciclo:
+            resp = QMessageBox.question(
+                self,
+                "PC já lançado",
+                f"O PC « {pc} » já existe nesta medição (aba atual).\n\n"
+                "Deseja editar o lançamento existente?\n\n"
+                "• Sim — carrega os dados para alteração\n"
+                "• Não — mantém o formulário como está (evita sobrescrever por engano)",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if resp != QMessageBox.Yes:
+                return
+
+            self.pc_em_edicao = pc
+            self._aplicar_dados_pc_no_formulario(
+                existente_ciclo, modo_edicao=True, preencher_pagos=True
+            )
+            self.btn_excluir.setVisible(True)
+            self.btn_salvar.setText("Atualizar Lançamento")
+            self.frame_formulario.setVisible(True)
             return
 
-        self.pc_em_edicao = pc
+        # 2) Outro ciclo / histórico → nova parcela
+        base = database.buscar_base_pc_projeto(pc, proj, excluir_ciclo_id=ciclo)
+        if not base:
+            return
 
-        prestador = utils.limpar_texto(existente.get("PRESTADOR", ""))
-        index = self.combo_prestador.findText(prestador)
-        if index >= 0:
-            self.combo_prestador.setCurrentIndex(index)
+        pagos = utils.str_para_float(base.get("VALORES PAGOS", 0))
+        total = utils.str_para_float(base.get("VALOR TOTAL DO PC", 0))
+        self.pc_em_edicao = None
+        self.btn_excluir.setVisible(False)
+        self.btn_salvar.setText("Salvar Lançamento")
+        self._aplicar_dados_pc_no_formulario(base, modo_edicao=False, preencher_pagos=True)
+        self.frame_formulario.setVisible(True)
 
-        self.txt_atividade.setText(utils.limpar_texto(existente.get("ATIVIDADE/SERVIÇO", "")))
-        total = utils.str_para_float(existente.get("VALOR TOTAL DO PC", 0))
-        pagos = utils.str_para_float(existente.get("VALORES PAGOS", 0))
-        self.txt_valor_total.setText(str(existente.get("VALOR TOTAL DO PC", "")))
-        if total > 0:
-            self.txt_valores_pagos.setText(
-                self._formatar_percentual_exibicao((pagos / total) * 100.0)
-            )
+        if total > 0 and pagos >= 0:
+            pct = self._formatar_percentual_exibicao((pagos / total) * 100.0)
+            pagos_txt = f"R$ {pagos:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            extra = f"Já pago: {pagos_txt} ({pct}%)\n\n"
         else:
-            self.txt_valores_pagos.setText(str(existente.get("VALORES PAGOS", "0")))
-        self.txt_valor_a_pagar.clear()
-        self.txt_oc.setText(utils.limpar_texto(existente.get("OC", "")))
-        self.txt_end_id.setText(utils.limpar_texto(existente.get("END ID", "")))
-        self.txt_nota_fiscal.setText(utils.limpar_texto(existente.get("NOTA FISCAL", "")))
-        self.txt_regional.setText(utils.limpar_texto(existente.get("REGIONAL", "")))
+            extra = ""
 
-        status = utils.limpar_texto(existente.get("STATUS PC", ""))
-        if status:
-            idx_status = self.combo_status.findText(status)
-            if idx_status >= 0:
-                self.combo_status.setCurrentIndex(idx_status)
-
-        self.radio_porcentagem_pago.setChecked(True)
-        self.radio_porcentagem.setChecked(True)
-        self.txt_valores_pagos.setPlaceholderText("Percentual já pago(%)")
-        self.txt_valor_a_pagar.setPlaceholderText("Percentual a pagar(%)")
-
-        self.btn_excluir.setVisible(True)
-        self.btn_salvar.setText("Atualizar Lançamento")
+        QMessageBox.information(
+            self,
+            "PC encontrado em medição anterior",
+            f"O PC « {pc} » já foi lançado em outra medição deste projeto.\n\n"
+            f"Dados base e valor já pago foram preenchidos.\n"
+            f"{extra}"
+            "Informe o valor a pagar desta parcela e revise os campos antes de salvar.",
+        )
 
     def abrir_formulario_novo(self):
         if not self.garantir_ciclo_ativo():

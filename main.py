@@ -75,39 +75,37 @@ class JanelaPrincipal(QMainWindow):
         divisor.setStyleSheet("background-color: #1e293b; margin-bottom: 15px;")
         layout_sidebar.addWidget(divisor)
 
-        # Botões do Menu
-        self.btn_cadastro = QPushButton("📋 Cadastros")
-        self.btn_cadastro.setCheckable(True)
-        self.btn_cadastro.setChecked(True)
-        self.btn_cadastro.clicked.connect(lambda: self.mudar_tela(0))
-
+        # Botões do Menu (ordem = frequência de uso)
         self.btn_lancamentos = QPushButton("📊 Lançamentos")
         self.btn_lancamentos.setCheckable(True)
-        self.btn_lancamentos.clicked.connect(lambda: self.mudar_tela(1))
+        self.btn_lancamentos.setChecked(True)
+        self.btn_lancamentos.clicked.connect(lambda: self.mudar_tela(0))
+
+        self.btn_cadastro = QPushButton("📋 Cadastros")
+        self.btn_cadastro.setCheckable(True)
+        self.btn_cadastro.clicked.connect(lambda: self.mudar_tela(1))
 
         self.btn_medicoes = QPushButton("📈 Medições Fechadas")
         self.btn_medicoes.setCheckable(True)
         self.btn_medicoes.clicked.connect(lambda: self.mudar_tela(2))
 
-        layout_sidebar.addWidget(self.btn_cadastro)
         layout_sidebar.addWidget(self.btn_lancamentos)
+        layout_sidebar.addWidget(self.btn_cadastro)
         layout_sidebar.addWidget(self.btn_medicoes)
-        layout_sidebar.addStretch() # Empurra tudo para o topo
+        layout_sidebar.addStretch()
 
         # --- ÁREA CENTRAL DE CONTEÚDO (STACKED WIDGET) ---
         self.paginas = QStackedWidget()
         self.paginas.setStyleSheet("background-color: #020617;")
 
-        # Instanciando as telas
-        self.tela_cadastro = TelaCadastro()
         self.tela_lancamentos = TelaLancamentos()
-        # Após self.tela_lancamentos = TelaLancamentos()
+        self.tela_cadastro = TelaCadastro()
         self.tela_medicoes_fechadas = TelaMedicoesFechadas()
 
-        # Adicionando ao empilhador de telas
-        self.paginas.addWidget(self.tela_cadastro)   # Índice 0
-        self.paginas.addWidget(self.tela_lancamentos) # Índice 1
-        self.paginas.addWidget(self.tela_medicoes_fechadas) # Índice 2
+        # Stack alinhado ao menu (Lançamentos = tela inicial)
+        self.paginas.addWidget(self.tela_lancamentos)        # Índice 0
+        self.paginas.addWidget(self.tela_cadastro)          # Índice 1
+        self.paginas.addWidget(self.tela_medicoes_fechadas)   # Índice 2
 
         self.setStyleSheet("""
             QMessageBox {
@@ -136,13 +134,15 @@ class JanelaPrincipal(QMainWindow):
 
     def mudar_tela(self, indice):
         self.paginas.setCurrentIndex(indice)
-        self.btn_cadastro.setChecked(indice == 0)
-        self.btn_lancamentos.setChecked(indice == 1)
+        self.btn_lancamentos.setChecked(indice == 0)
+        self.btn_cadastro.setChecked(indice == 1)
         self.btn_medicoes.setChecked(indice == 2)
 
-        if indice == 1:
+        if indice == 0:
             self.tela_lancamentos.carregar_fornecedores_combo()
             self.tela_lancamentos.carregar_dados_tabela()
+        elif indice == 1:
+            self.tela_cadastro.carregar_dados_tabela()
         elif indice == 2:
             self.tela_medicoes_fechadas.recarregar()
 

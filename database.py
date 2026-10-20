@@ -736,6 +736,79 @@ def buscar_lancamento_por_pc(pc, nome_projeto="PROJETO AEV", ciclo_id=None):
         return {k: (v if v is not None else "") for k, v in dict(row).items()}
 
 
+def buscar_base_pc_projeto(pc, nome_projeto="PROJETO AEV", excluir_ciclo_id=None):
+    """
+    Busca dados-base de um PC em qualquer ciclo do projeto (para nova parcela).
+
+    Prioriza o lançamento com maior valor já pago (valores_pagos).
+    Se não houver lançamento, tenta consolidar pelo histórico.
+
+    Retorna dict no formato das colunas de lançamento + chave opcional
+    _origem ('lancamento' | 'historico'), ou None.
+    """
+    pc = str(pc).strip()
+    with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        query = f"""
+        SELECT {SELECT_LANCAMENTO_COLUNAS}, l.ciclo_id AS "_ciclo_id"
+        FROM lancamentos l
+        JOIN projetos p ON l.projeto_id = p.id
+        WHERE p.nome = ? AND l.pc = ?
+        """
+        params = [nome_projeto, pc]
+        if excluir_ciclo_id is not None:
+            query += " AND (l.ciclo_id IS NULL OR l.ciclo_id != ?)"
+            params.append(excluir_ciclo_id)
+        query += " ORDER BY l.valores_pagos DESC, l.id DESC LIMIT 1"
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        if row:
+            dados = {k: (v if v is not None else "") for k, v in dict(row).items()}
+            dados["_origem"] = "lancamento"
+            return dados
+
+        # Fallback: histórico (última linha de dados + soma do valor_a_pagar fechado)
+        cursor.execute(
+            """
+            SELECT COALESCE(SUM(h.valor_a_pagar), 0)
+            FROM historico_medicoes h
+            JOIN projetos p ON h.projeto_id = p.id
+            WHERE p.nome = ? AND h.pc = ?
+            """,
+            (nome_projeto, pc),
+        )
+        total_pago_hist = float(cursor.fetchone()[0] or 0)
+
+        cursor.execute(
+            """
+            SELECT
+                h.pc AS "PC",
+                h.prestador AS "PRESTADOR",
+                h.atividade AS "ATIVIDADE/SERVIÇO",
+                h.valor_total AS "VALOR TOTAL DO PC",
+                h.oc AS "OC",
+                h.end_id AS "END ID",
+                h.regional AS "REGIONAL",
+                h.nota_fiscal AS "NOTA FISCAL"
+            FROM historico_medicoes h
+            JOIN projetos p ON h.projeto_id = p.id
+            WHERE p.nome = ? AND h.pc = ?
+            ORDER BY h.id DESC
+            LIMIT 1
+            """,
+            (nome_projeto, pc),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        dados = {k: (v if v is not None else "") for k, v in dict(row).items()}
+        dados["VALORES PAGOS"] = total_pago_hist
+        dados["_origem"] = "historico"
+        return dados
+
+
 def adicionar_lancamento(dados, nome_projeto="PROJETO AEV", ciclo_id=None):
     """
     Insere lançamento no ciclo informado (ou no ciclo padrão aberto do projeto).
@@ -761,7 +834,12 @@ def adicionar_lancamento(dados, nome_projeto="PROJETO AEV", ciclo_id=None):
     pc = dados_limpos[0]
     existente = buscar_lancamento_por_pc(pc, nome_projeto, ciclo_id=ciclo_id)
     if existente:
-        return atualizar_lancamento(pc, dados, nome_projeto, ciclo_id=ciclo_id)
+        return False, (
+            f"Não foi possível salvar: o PC « {pc} » já existe nesta medição.\n\n"
+            "Para alterar o lançamento, confirme a edição ao digitar o PC "
+            "(ou abra-o com duplo clique na tabela).\n"
+            "Para uma nova parcela, use outra aba/ciclo de medição."
+        )
 
     try:
         with get_connection() as conn:
