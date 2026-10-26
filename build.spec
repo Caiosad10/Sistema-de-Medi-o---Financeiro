@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-exe_name = "SisMed v3.5"
+exe_name = "SisMed v3.6"
 
 additional_files = [
     ('TEMPLATE_MEDICAO_AEV_LIMPO_V2_VALIDADO.xlsx', '.'),

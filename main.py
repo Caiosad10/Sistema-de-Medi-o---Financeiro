@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 import database  # Importando o arquivo que construímos!
+from versao import VERSAO
 # Importando as telas que já construímos
 from ui_cadastro import TelaCadastro
 from ui_lancamentos import TelaLancamentos
@@ -13,7 +14,7 @@ from ui_medicoes_fechadas import TelaMedicoesFechadas
 class JanelaPrincipal(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Sistema de Gerenciamento de Medições e Pagamentos - 2026")
+        self.setWindowTitle(f"Sistema de Gerenciamento de Medições e Pagamentos - v{VERSAO}")
         self.resize(1280, 720)
 
         # ===== CORREÇÃO CRÍTICA: Inicializa o banco de dados =====

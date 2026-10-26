@@ -6,9 +6,11 @@ from PySide6.QtWidgets import (
     QTabBar, QDialog, QDialogButtonBox, QSizePolicy, QMenu, QInputDialog
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 import database
 import utils
 from utils import str_para_float
+from ui_modal import confirmar, informar, alerta, erro, planilha_pronta
 from pc_pdf_reader import importar_pc_medicao, match_prestador_cadastrado
 
 class TelaLancamentos(QWidget):
@@ -19,6 +21,11 @@ class TelaLancamentos(QWidget):
         self.ciclo_id_ativo = None
         self._ciclos_cache = []
         self._bloqueando_abas = False
+        self._filtro_status = None  # None = sem filtro; "MOBILIZA"/"ADIANT"/"CONCLU"
+        self._card_frames = {}  # {"MOBILIZA": wrapper, "ADIANT": wrapper, "CONCLU": wrapper}
+        self._card_original_style = {}  # {"MOBILIZA": stylesheet, ...}
+        self._animacao_glow = None
+        self._glow_frame_idx = 0
         self.init_ui()
         self.carregar_projetos_combo()
         self.carregar_fornecedores_combo()
@@ -58,8 +65,28 @@ class TelaLancamentos(QWidget):
 
         layout_topo_projeto.addWidget(lbl_icone)
         layout_topo_projeto.addWidget(self.combo_projeto)
+
+        # Contador de lançamentos do ciclo (texto sutil; sempre o ciclo inteiro, ignora a busca)
+        self.lbl_contador = QLabel("")
+        self.lbl_contador.setStyleSheet("color: #94a3b8; font-weight: 600; font-size: 12px; padding-left: 12px;")
+        layout_topo_projeto.addWidget(self.lbl_contador)
+
         layout_topo_projeto.addStretch()
-        
+
+        # Total da medição (caixa no canto direito, mesmo estilo visual do dropdown)
+        self.lbl_total_medicao = QLabel()
+        self.lbl_total_medicao.setTextFormat(Qt.RichText)
+        self.lbl_total_medicao.setStyleSheet("""
+            QLabel {
+                background-color: #1e293b;
+                border: 2px solid #3b82f6;
+                border-radius: 8px;
+                padding: 6px 15px;
+                font-size: 14px;
+            }
+        """)
+        layout_topo_projeto.addWidget(self.lbl_total_medicao)
+
         layout_principal.addLayout(layout_topo_projeto)
 
         # --- 0.1 BARRA DE ABAS (ciclos de medição) ---
@@ -125,17 +152,33 @@ class TelaLancamentos(QWidget):
         self.lbl_card_mobilizacao = self.criar_card("Status: Mobilização", "R$ 0,00", "#b45309", "#78350f", "#f59e0b")
         self.lbl_card_adiantamento = self.criar_card("Status: Adiantamento", "R$ 0,00", "#1d4ed8", "#1e3a8a", "#60a5fa")
         self.lbl_card_conclusao = self.criar_card("Status: Conclusão", "R$ 0,00", "#6d28d9", "#4c1d95", "#a78bfa")
-        self.lbl_card_saldo_aberto = self.criar_card("Saldo em Aberto (Total)", "R$ 0,00", "#be123c", "#881337", "#f43f5e")
 
-        layout_cards.addWidget(self.lbl_card_mobilizacao.parentWidget())
-        layout_cards.addWidget(self.lbl_card_adiantamento.parentWidget())
-        layout_cards.addWidget(self.lbl_card_conclusao.parentWidget())
-        
-        # Guardamos o widget pai e o ocultamos visualmente
-        card_saldo_widget = self.lbl_card_saldo_aberto.parentWidget()
-        layout_cards.addWidget(card_saldo_widget)
-        card_saldo_widget.setVisible(False)
-        
+        # Guarda os frames e torna clicáveis
+        frame_mob = self.lbl_card_mobilizacao.parentWidget()
+        frame_adi = self.lbl_card_adiantamento.parentWidget()
+        frame_con = self.lbl_card_conclusao.parentWidget()
+
+        self._card_original_style = {
+            "MOBILIZA": frame_mob.styleSheet(),
+            "ADIANT": frame_adi.styleSheet(),
+            "CONCLU": frame_con.styleSheet(),
+        }
+
+        wrapper_mob = self._criar_glow_wrapper(frame_mob)
+        wrapper_adi = self._criar_glow_wrapper(frame_adi)
+        wrapper_con = self._criar_glow_wrapper(frame_con)
+
+        self._card_frames = {"MOBILIZA": wrapper_mob, "ADIANT": wrapper_adi, "CONCLU": wrapper_con}
+
+        for chave, wrapper in self._card_frames.items():
+            wrapper.setCursor(Qt.CursorShape.PointingHandCursor)
+            wrapper.setToolTip("Clique para filtrar por este status")
+            wrapper.mousePressEvent = lambda e, c=chave: self.toggle_filtro_card(c)
+
+        layout_cards.addWidget(wrapper_mob)
+        layout_cards.addWidget(wrapper_adi)
+        layout_cards.addWidget(wrapper_con)
+
         layout_principal.addLayout(layout_cards)
 
         # --- 2. BARRA DE AÇÕES (Botões e Campo de Busca) ---
@@ -226,11 +269,29 @@ class TelaLancamentos(QWidget):
         """)
         self.txt_busca.textChanged.connect(self.filtrar_tabela)
 
+        # Botão "Remover filtro" (mesmo estilo do dropdown/total)
+        self.btn_remover_filtro = QPushButton("✕ Remover filtro")
+        self.btn_remover_filtro.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b;
+                color: #38bdf8;
+                font-weight: bold;
+                font-size: 14px;
+                border: 2px solid #3b82f6;
+                border-radius: 8px;
+                padding: 6px 15px;
+            }
+            QPushButton:hover { background-color: #334155; }
+        """)
+        self.btn_remover_filtro.setVisible(False)
+        self.btn_remover_filtro.clicked.connect(self.remover_filtro)
+
         layout_acoes.addWidget(self.btn_novo)
         layout_acoes.addWidget(self.btn_exportar)
         layout_acoes.addWidget(self.btn_fechar_medicao)
         layout_acoes.addWidget(self.btn_limpar_projeto)
         layout_acoes.addStretch()
+        layout_acoes.addWidget(self.btn_remover_filtro)
         layout_acoes.addWidget(self.txt_busca)
         
         layout_principal.addLayout(layout_acoes)
@@ -1000,6 +1061,7 @@ class TelaLancamentos(QWidget):
                 self.tabela.setItem(i, j, item)
 
         self.filtrar_tabela()
+        self.atualizar_resumo_topo()
         header = self.tabela.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         self.tabela.setColumnWidth(0, 110)
@@ -1008,19 +1070,39 @@ class TelaLancamentos(QWidget):
         self.tabela.setColumnWidth(3, 110)
         self.tabela.setUpdatesEnabled(True)
 
+    def _criar_glow_wrapper(self, card_frame):
+        """Envolve o card em um QFrame que fornece espaço para a borda de glow animada."""
+        wrapper = QFrame(self)
+        wrapper.setStyleSheet("""
+            QFrame {
+                background: transparent;
+                border: none;
+                padding: 4px;
+            }
+        """)
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        wrapper_layout.setSpacing(0)
+        wrapper_layout.addWidget(card_frame)
+        return wrapper
+
     def atualizar_cards(self, lancamentos):
+        # Se filtro por card ativo, cards mostram valores do ciclo inteiro (não recalcula)
+        if self._filtro_status:
+            lancamentos = self.dados_carregados
+
         tot_mob = sum(
             utils.str_para_float(l.get("VALOR A PAGAR", 0))
             for l in lancamentos 
             if "MOBILIZA" in utils.limpar_texto(l.get("STATUS PC", "")).upper()
         )
-        
+
         tot_adi = sum(
             utils.str_para_float(l.get("VALOR A PAGAR", 0))
             for l in lancamentos 
             if "ADIANT" in utils.limpar_texto(l.get("STATUS PC", "")).upper() or "ADVANCE" in utils.limpar_texto(l.get("STATUS PC", "")).upper()
         )
-        
+
         tot_conc = sum(
             utils.str_para_float(l.get("VALOR A PAGAR", 0))
             for l in lancamentos 
@@ -1030,6 +1112,47 @@ class TelaLancamentos(QWidget):
         self.lbl_card_mobilizacao.setText(utils.float_para_moeda(tot_mob))
         self.lbl_card_adiantamento.setText(utils.float_para_moeda(tot_adi))
         self.lbl_card_conclusao.setText(utils.float_para_moeda(tot_conc))
+
+    def atualizar_resumo_topo(self):
+        """Contador de lançamentos por status + total da medição (Σ valor a pagar).
+
+        Sempre considera o ciclo inteiro (self.dados_carregados), sem interferência
+        da busca — assim o total exibido bate com a planilha exportada.
+        """
+        def plural(n, singular, plural_txt):
+            return f"{n} {singular}" if n == 1 else f"{n} {plural_txt}"
+
+        lancamentos = self.dados_carregados
+        n_total = len(lancamentos)
+        n_mob = sum(
+            1 for l in lancamentos
+            if "MOBILIZA" in utils.limpar_texto(l.get("STATUS PC", "")).upper()
+        )
+        n_adi = sum(
+            1 for l in lancamentos
+            if "ADIANT" in utils.limpar_texto(l.get("STATUS PC", "")).upper()
+            or "ADVANCE" in utils.limpar_texto(l.get("STATUS PC", "")).upper()
+        )
+        n_con = sum(
+            1 for l in lancamentos
+            if "CONCLU" in utils.limpar_texto(l.get("STATUS PC", "")).upper()
+        )
+        total_medicao = sum(
+            utils.str_para_float(l.get("VALOR A PAGAR", 0))
+            for l in lancamentos
+        )
+
+        self.lbl_contador.setText(
+            f"{plural(n_total, 'Lançamento', 'Lançamentos')} — "
+            f"{plural(n_mob, 'Mobilização', 'Mobilizações')} • "
+            f"{plural(n_adi, 'Adiantamento', 'Adiantamentos')} • "
+            f"{plural(n_con, 'Conclusão', 'Conclusões')}"
+        )
+        self.lbl_total_medicao.setText(
+            f'<span style="color:#94a3b8;">Total da Medição:</span> '
+            f'<span style="color:#38bdf8; font-weight:bold;">'
+            f"{utils.float_para_moeda(total_medicao)}</span>"
+        )
 
     def carregar_dados_tabela(self):
         self.atualizar_barra_abas()
@@ -1050,12 +1173,106 @@ class TelaLancamentos(QWidget):
                         match = True
                         break
 
+            # Filtro por card (status) — só a tabela filtra; cards/contador/total não mudam
+            if match and self._filtro_status and row < len(self.dados_carregados):
+                status_lanc = utils.limpar_texto(self.dados_carregados[row].get("STATUS PC", "")).upper()
+                match = self._filtro_status in status_lanc
+
             self.tabela.setRowHidden(row, not match)
 
             if match and row < len(self.dados_carregados):
                 lancamentos_visiveis.append(self.dados_carregados[row])
 
         self.atualizar_cards(lancamentos_visiveis)
+
+    def toggle_filtro_card(self, chave):
+        """Alterna o filtro de status ao clicar no card."""
+        if self._filtro_status == chave:
+            self.remover_filtro()
+        else:
+            self._filtro_status = chave
+            self._aplicar_visual_filtro()
+            self.filtrar_tabela()
+
+    def remover_filtro(self):
+        """Remove o filtro de status e restaura visual dos cards."""
+        self._filtro_status = None
+        self._reset_visual_cards()
+        self.filtrar_tabela()
+
+    def _aplicar_visual_filtro(self):
+        """Glow RGB no card selecionado + esmaece os outros."""
+        self.btn_remover_filtro.setVisible(True)
+
+        for chave, wrapper in self._card_frames.items():
+            if chave == self._filtro_status:
+                self._iniciar_glow(wrapper)
+            else:
+                # Esmaece o card DENTRO do wrapper (preserva stylesheet do wrapper)
+                card = wrapper.findChild(QFrame)
+                if card:
+                    style = card.styleSheet()
+                    if "opacity: 0.35" not in style:
+                        card.setStyleSheet(style + "\nQFrame { opacity: 0.35; }")
+
+    def _reset_visual_cards(self):
+        """Remove glow e restaura opacidade de todos os cards."""
+        self.btn_remover_filtro.setVisible(False)
+        self._parar_glow()
+        for chave, wrapper in self._card_frames.items():
+            # Restaura wrapper (sem borda de glow)
+            wrapper.setStyleSheet("""
+                QFrame {
+                    background: transparent;
+                    border: none;
+                    padding: 4px;
+                }
+            """)
+            # Restaura stylesheet original do card (sem opacity)
+            card = wrapper.findChild(QFrame)
+            if card:
+                orig = self._card_original_style.get(chave, "")
+                card.setStyleSheet(orig)
+
+    def _iniciar_glow(self, wrapper):
+        """Inicia animação RGB na borda do wrapper (não toca no card)."""
+        self._parar_glow()
+        self._glow_frame_idx = 0
+        self._glow_target = wrapper
+        self._animacao_glow = self.startTimer(50)  # 50ms por frame
+
+    def _parar_glow(self):
+        """Para a animação RGB e restaura o wrapper."""
+        if self._animacao_glow is not None:
+            self.killTimer(self._animacao_glow)
+            self._animacao_glow = None
+        if hasattr(self, '_glow_target') and self._glow_target is not None:
+            self._glow_target.setStyleSheet("""
+                QFrame {
+                    background: transparent;
+                    border: none;
+                    padding: 4px;
+                }
+            """)
+
+    def timerEvent(self, event):
+        """Atualiza a cor da borda RGB (apenas no wrapper, preserva o card)."""
+        if self._animacao_glow is None or not hasattr(self, '_glow_target'):
+            return
+        if event.timerId() == self._animacao_glow:
+            self._glow_frame_idx = (self._glow_frame_idx + 1) % 100
+            # HSL: hue de 0 a 360
+            hue = int(self._glow_frame_idx * 3.6)
+            cor = QColor.fromHsl(hue, 255, 128).name()
+            # Apenas o wrapper recebe a borda animada; o card dentro mantém seu stylesheet
+            self._glow_target.setStyleSheet(f"""
+                QFrame {{
+                    border: 2px solid {cor};
+                    border-radius: 16px;
+                    padding: 4px;
+                    background: transparent;
+                }}
+            """)
 
     def importar_pc_pdf(self):
         """Lê PDF de medição e preenche o formulário de novo lançamento."""
@@ -1074,7 +1291,7 @@ class TelaLancamentos(QWidget):
         try:
             dados = importar_pc_medicao(caminho)
         except ValueError as e:
-            QMessageBox.critical(self, "Erro na importação", str(e))
+            erro(self, "Erro na importação", str(e))
             return
         except Exception as e:
             QMessageBox.critical(
@@ -1481,7 +1698,7 @@ class TelaLancamentos(QWidget):
             )
 
         if sucesso:
-            QMessageBox.information(self, "Sucesso", f"Lançamento registrado com sucesso no projeto '{proj}'!")
+            informar(self, "Sucesso", f"Lançamento registrado com sucesso no projeto '{proj}'!")
             self.fechar_formulario()
             self.carregar_dados_tabela()
         else:
@@ -1510,7 +1727,7 @@ class TelaLancamentos(QWidget):
                 self.pc_em_edicao, nome_projeto=proj, ciclo_id=self.ciclo_id_ativo
             )
             if sucesso:
-                QMessageBox.information(self, "Sucesso", f"Lançamento '{self.pc_em_edicao}' excluído!")
+                informar(self, "Sucesso", f"Lançamento '{self.pc_em_edicao}' excluído!")
                 self.fechar_formulario()
                 self.carregar_dados_tabela()
             else:
@@ -1537,9 +1754,15 @@ class TelaLancamentos(QWidget):
                 caminho_arquivo, nome_projeto=proj, ciclo_id=self.ciclo_id_ativo
             )
             if sucesso:
-                QMessageBox.information(
-                    self, "Exportação Concluída",
-                    f"Planilha do projeto '{proj}' salva com sucesso em:\n{caminho_arquivo}"
+                total_medicao = sum(
+                    utils.str_para_float(l.get("VALOR A PAGAR", 0))
+                    for l in self.dados_carregados
+                )
+                planilha_pronta(
+                    self,
+                    caminho_arquivo,
+                    total_medicao,
+                    proj,
                 )
             else:
                 QMessageBox.critical(
@@ -1547,6 +1770,28 @@ class TelaLancamentos(QWidget):
                     "Erro na exportação",
                     erro or "Não foi possível gerar a planilha de exportação.",
                 )
+
+    def _resumo_ciclo(self):
+        """Retorna contagens e total da medição atual (ciclo inteiro)."""
+        lancamentos = self.dados_carregados
+        n_total = len(lancamentos)
+        n_mob = sum(1 for l in lancamentos if "MOBILIZA" in utils.limpar_texto(l.get("STATUS PC", "")).upper())
+        n_adi = sum(1 for l in lancamentos if "ADIANT" in utils.limpar_texto(l.get("STATUS PC", "")).upper() or "ADVANCE" in utils.limpar_texto(l.get("STATUS PC", "")).upper())
+        n_con = sum(1 for l in lancamentos if "CONCLU" in utils.limpar_texto(l.get("STATUS PC", "")).upper())
+        total = sum(utils.str_para_float(l.get("VALOR A PAGAR", 0)) for l in lancamentos)
+
+        def plural(n, sing, plur):
+            return f"{n} {sing}" if n == 1 else f"{n} {plur}"
+
+        return {
+            "total": n_total,
+            "mob": n_mob,
+            "adi": n_adi,
+            "con": n_con,
+            "valor": total,
+            "texto_contador": f"{plural(n_total, 'Lançamento', 'Lançamentos')} — {plural(n_mob, 'Mobilização', 'Mobilizações')} • {plural(n_adi, 'Adiantamento', 'Adiantamentos')} • {plural(n_con, 'Conclusão', 'Conclusões')}",
+            "texto_total": f"Total da medição: {utils.float_para_moeda(total)}",
+        }
 
     def fechar_medicao(self):
         proj = self.projeto_atual()
@@ -1560,21 +1805,22 @@ class TelaLancamentos(QWidget):
         ciclo = database.obter_ciclo(self.ciclo_id_ativo)
         nome_aba = self._titulo_aba(ciclo) if ciclo else "Medição"
 
-        confirmacao = QMessageBox.question(
+        resumo = self._resumo_ciclo()
+        confirmacao = confirmar(
             self,
             "Fechar Medição do Ciclo",
-            f"Deseja fechar e consolidar a aba '{nome_aba}' do projeto '{proj}'?\n\n"
+            f"Confira antes de fechar a aba '{nome_aba}':\n\n"
+            f"📊 {resumo['texto_contador']}\n"
+            f"💰 {resumo['texto_total']}\n\n"
             "Isso irá:\n"
             "1. Gerar e salvar a planilha do financeiro.\n"
             "2. Registrar os lançamentos no histórico.\n"
             "3. Acumular o 'Valor a Pagar' em 'Valores Pagos'.\n"
             "4. Fechar esta aba (as outras abas do projeto continuam abertas).\n\n"
             "PCs com saldo em aberto poderão ser relançados em uma nova aba.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
         )
 
-        if confirmacao != QMessageBox.Yes:
+        if not confirmacao:
             return
 
         nome_sugerido = f"MEDICAO_CONSOLIDADA_{proj.replace(' ', '_')}.xlsx"
@@ -1590,11 +1836,11 @@ class TelaLancamentos(QWidget):
                 caminho_arquivo, nome_projeto=proj, ciclo_id=self.ciclo_id_ativo
             )
             if sucesso:
-                QMessageBox.information(
+                planilha_pronta(
                     self,
-                    "Medição Encerrada",
-                    f"A aba '{nome_aba}' do projeto '{proj}' foi consolidada com sucesso!\n\n"
-                    f"Planilha salva em:\n{caminho_arquivo}",
+                    caminho_arquivo,
+                    resumo["valor"],
+                    proj,
                 )
                 self.ciclo_id_ativo = None
                 self.fechar_formulario()
