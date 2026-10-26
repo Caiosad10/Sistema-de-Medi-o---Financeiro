@@ -2,7 +2,7 @@ import sys
 from PySide6.QtWidgets import (
     QRadioButton, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, 
     QLineEdit, QComboBox, QPushButton, QTableWidget, QTableWidgetItem, 
-    QHeaderView, QMessageBox, QFrame, QFileDialog, QApplication, QCompleter,
+    QHeaderView, QFrame, QFileDialog, QApplication, QCompleter,
     QTabBar, QDialog, QDialogButtonBox, QSizePolicy, QMenu, QInputDialog
 )
 from PySide6.QtCore import Qt
@@ -10,7 +10,7 @@ from PySide6.QtGui import QColor
 import database
 import utils
 from utils import str_para_float
-from ui_modal import confirmar, informar, alerta, erro, planilha_pronta
+from ui_modal import confirmar, informar, alerta, erro, planilha_pronta, importacao_pc
 from pc_pdf_reader import importar_pc_medicao, match_prestador_cadastrado
 
 class TelaLancamentos(QWidget):
@@ -642,16 +642,7 @@ class TelaLancamentos(QWidget):
         self.lbl_preview_porcentagem.setText("")
 
     def exibir_alerta(self, titulo, mensagem):
-        msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Warning)
-        msg.setWindowTitle(titulo)
-        msg.setText(mensagem)
-        msg.setStyleSheet("""
-            QMessageBox { background-color: #1e293b; color: #f8fafc; }
-            QLabel { color: #f8fafc; }
-            QPushButton { background-color: #3b82f6; color: white; border-radius: 4px; padding: 6px 12px; }
-        """)
-        msg.exec()
+        alerta(self, titulo, mensagem)
 
     def criar_card(self, titulo, valor_inicial, cor_grad_inicio, cor_grad_fim, cor_borda):
         frame = QFrame(self)
@@ -870,12 +861,7 @@ class TelaLancamentos(QWidget):
         if database.atualizar_ciclo(ciclo_id, titulo=titulo, tipo=tipo):
             self.carregar_dados_tabela()
         else:
-            QMessageBox.critical(
-                self,
-                "Erro ao editar aba",
-                "Não foi possível atualizar a aba.\n\n"
-                "Verifique se a aba ainda está aberta e tente novamente.",
-            )
+                erro(self, "Erro ao editar aba", "Não foi possível atualizar a aba.\n\nVerifique se a aba ainda está aberta e tente novamente.")
 
     def _excluir_aba(self, ciclo_id):
         ciclo = database.obter_ciclo(ciclo_id)
@@ -893,14 +879,8 @@ class TelaLancamentos(QWidget):
                 "Se quiser registrar no histórico, use 'Fechar Medição'."
             )
 
-        resp = QMessageBox.warning(
-            self,
-            "Excluir aba",
-            f"Deseja excluir a aba '{nome}'?{extra}",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if resp != QMessageBox.Yes:
+        resp = confirmar(self, "Excluir aba", f"Deseja excluir a aba '{nome}'?{extra}")
+        if not resp:
             return
 
         if database.excluir_ciclo(ciclo_id):
@@ -909,14 +889,7 @@ class TelaLancamentos(QWidget):
             self.fechar_formulario()
             self.carregar_dados_tabela()
         else:
-            QMessageBox.critical(
-                self,
-                "Erro ao excluir aba",
-                "Não foi possível excluir a aba.\n\n"
-                "Verifique se:\n"
-                "• A aba ainda existe\n"
-                "• O banco de dados não está em uso por outro programa",
-            )
+                erro(self, "Erro ao excluir aba", "Não foi possível excluir a aba.\n\nVerifique se:\n• A aba ainda existe\n• O banco de dados não está em uso por outro programa")
 
     def dialog_novo_ciclo(self):
         """Diálogo: tipo + título opcional. Retorna (tipo, titulo) ou None."""
@@ -965,12 +938,7 @@ class TelaLancamentos(QWidget):
         proj = self.projeto_atual()
         qtd = database.contar_ciclos_abertos(proj)
         if qtd >= database.LIMITE_ABAS_POR_PROJETO:
-            QMessageBox.warning(
-                self,
-                "Limite de abas",
-                f"Limite de {database.LIMITE_ABAS_POR_PROJETO} abas atingido neste projeto.\n"
-                "Feche a medição de uma das abas para abrir uma nova.",
-            )
+            alerta(self, "Limite de abas", f"Limite de {database.LIMITE_ABAS_POR_PROJETO} abas atingido neste projeto.\nFeche a medição de uma das abas para abrir uma nova.")
             return
 
         resultado = self.dialog_novo_ciclo()
@@ -979,9 +947,7 @@ class TelaLancamentos(QWidget):
         tipo, titulo = resultado
         novo_id = database.criar_ciclo(proj, tipo=tipo, titulo=titulo)
         if not novo_id:
-            QMessageBox.critical(
-                self,
-                "Erro ao criar aba",
+            erro(self, "Erro ao criar aba",
                 "Não foi possível criar a nova aba.\n\n"
                 "Verifique se:\n"
                 f"• O limite de {database.LIMITE_ABAS_POR_PROJETO} abas por projeto não foi atingido\n"
@@ -1004,14 +970,12 @@ class TelaLancamentos(QWidget):
             self.ciclo_id_ativo = ciclos[0]["id"]
             return True
 
-        resposta = QMessageBox.question(
-            self,
-            "Iniciar medição",
+        resposta = confirmar(self, "Iniciar medição",
             f"O projeto '{proj}' não possui medição aberta.\n\nDeseja criar uma nova aba agora?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
+            True | False,
+            True,
         )
-        if resposta != QMessageBox.Yes:
+        if resposta != True:
             return False
 
         resultado = self.dialog_novo_ciclo()
@@ -1020,9 +984,7 @@ class TelaLancamentos(QWidget):
         tipo, titulo = resultado
         novo_id = database.criar_ciclo(proj, tipo=tipo, titulo=titulo)
         if not novo_id:
-            QMessageBox.critical(
-                self,
-                "Erro ao criar medição",
+            erro(self, "Erro ao criar medição",
                 "Não foi possível criar a medição.\n\n"
                 "Verifique se:\n"
                 f"• O limite de {database.LIMITE_ABAS_POR_PROJETO} abas por projeto não foi atingido\n"
@@ -1294,9 +1256,7 @@ class TelaLancamentos(QWidget):
             erro(self, "Erro na importação", str(e))
             return
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Erro na importação",
+            erro(self, "Erro na importação",
                 "Não foi possível ler o PDF.\n\n"
                 "Verifique se:\n"
                 "• O arquivo não está aberto em outro programa\n"
@@ -1356,21 +1316,17 @@ class TelaLancamentos(QWidget):
         if avisos:
             msg += "\n\nAtenção:\n• " + "\n• ".join(avisos)
 
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Information if not avisos else QMessageBox.Warning)
-        box.setWindowTitle("Importação de PC")
-        box.setText(msg)
+        tipo_icone = "alerta" if avisos else "info"
         if not match and (dados.razao_social or dados.fantasia):
-            btn_cadastro = box.addButton("Ir para Cadastros", QMessageBox.ActionRole)
-            box.addButton("Continuar no lançamento", QMessageBox.AcceptRole)
-            box.exec()
-            if box.clickedButton() == btn_cadastro:
-                # Sinaliza para a janela principal trocar de tela, se existir
+            foi_para_cadastro = importacao_pc(
+                self, msg, tipo_icone, com_botao_cadastro=True
+            )
+            if foi_para_cadastro:
                 parent = self.window()
                 if hasattr(parent, "mudar_tela"):
                     parent.mudar_tela(1)
             return
-        box.exec()
+        informar(self, "Importação de PC", msg)
 
         # Após import: PC na mesma aba ou em outro ciclo
         self.tentar_carregar_pc_existente()
@@ -1452,17 +1408,8 @@ class TelaLancamentos(QWidget):
         # 1) Mesmo ciclo → confirmação antes de editar
         existente_ciclo = database.buscar_lancamento_por_pc(pc, proj, ciclo_id=ciclo)
         if existente_ciclo:
-            resp = QMessageBox.question(
-                self,
-                "PC já lançado",
-                f"O PC « {pc} » já existe nesta medição (aba atual).\n\n"
-                "Deseja editar o lançamento existente?\n\n"
-                "• Sim — carrega os dados para alteração\n"
-                "• Não — mantém o formulário como está (evita sobrescrever por engano)",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if resp != QMessageBox.Yes:
+            resp = confirmar(self, "PC já lançado", f"O PC « {pc} » já existe nesta medição (aba atual).\n\nDeseja editar o lançamento existente?\n\n• Sim — carrega os dados para alteração\n• Não — mantém o formulário como está (evita sobrescrever por engano)")
+            if not resp:
                 return
 
             self.pc_em_edicao = pc
@@ -1494,14 +1441,7 @@ class TelaLancamentos(QWidget):
         else:
             extra = ""
 
-        QMessageBox.information(
-            self,
-            "PC encontrado em medição anterior",
-            f"O PC « {pc} » já foi lançado em outra medição deste projeto.\n\n"
-            f"Dados base e valor já pago foram preenchidos.\n"
-            f"{extra}"
-            "Informe o valor a pagar desta parcela e revise os campos antes de salvar.",
-        )
+        informar(self, "PC encontrado em medição anterior", f"O PC « {pc} » já foi lançado em outra medição deste projeto.\n\nDados base e valor já pago foram preenchidos.\n{extra}Informe o valor a pagar desta parcela e revise os campos antes de salvar.")
 
     def abrir_formulario_novo(self):
         if not self.garantir_ciclo_ativo():
@@ -1702,11 +1642,7 @@ class TelaLancamentos(QWidget):
             self.fechar_formulario()
             self.carregar_dados_tabela()
         else:
-            QMessageBox.critical(
-                self,
-                "Erro ao salvar lançamento",
-                erro or "Não foi possível gravar o lançamento no banco de dados.",
-            )
+            erro(self, "Erro ao salvar lançamento", erro or "Não foi possível gravar o lançamento no banco de dados.")
 
     def excluir_registro(self):
         if not self.pc_em_edicao:
@@ -1714,15 +1650,9 @@ class TelaLancamentos(QWidget):
 
         proj = self.projeto_atual()
 
-        resposta = QMessageBox.question(
-            self,
-            "Confirmar Exclusão",
-            f"Tem certeza que deseja excluir o lançamento '{self.pc_em_edicao}' do projeto '{proj}'?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
+        resposta = confirmar(self, "Confirmar Exclusão", f"Tem certeza que deseja excluir o lançamento '{self.pc_em_edicao}' do projeto '{proj}'?")
 
-        if resposta == QMessageBox.Yes:
+        if resposta:
             sucesso, erro = database.deletar_lancamento(
                 self.pc_em_edicao, nome_projeto=proj, ciclo_id=self.ciclo_id_ativo
             )
@@ -1731,11 +1661,7 @@ class TelaLancamentos(QWidget):
                 self.fechar_formulario()
                 self.carregar_dados_tabela()
             else:
-                QMessageBox.critical(
-                    self,
-                    "Erro ao excluir",
-                    erro or "Não foi possível excluir o lançamento do banco de dados.",
-                )
+                erro(self, "Erro ao excluir", erro or "Não foi possível excluir o lançamento do banco de dados.")
 
     def exportar_excel(self):
         proj = self.projeto_atual()
@@ -1765,11 +1691,7 @@ class TelaLancamentos(QWidget):
                     proj,
                 )
             else:
-                QMessageBox.critical(
-                    self,
-                    "Erro na exportação",
-                    erro or "Não foi possível gerar a planilha de exportação.",
-                )
+                erro(self, "Erro na exportação", erro or "Não foi possível gerar a planilha de exportação.")
 
     def _resumo_ciclo(self):
         """Retorna contagens e total da medição atual (ciclo inteiro)."""
@@ -1796,10 +1718,7 @@ class TelaLancamentos(QWidget):
     def fechar_medicao(self):
         proj = self.projeto_atual()
         if not self.ciclo_id_ativo:
-            QMessageBox.information(
-                self, "Nenhuma medição aberta",
-                "Não há aba de medição aberta para fechar neste projeto."
-            )
+            informar(self, "Nenhuma medição aberta", "Não há aba de medição aberta para fechar neste projeto.")
             return
 
         ciclo = database.obter_ciclo(self.ciclo_id_ativo)
@@ -1846,14 +1765,7 @@ class TelaLancamentos(QWidget):
                 self.fechar_formulario()
                 self.carregar_dados_tabela()
             else:
-                QMessageBox.critical(
-                    self,
-                    "Erro no Fechamento",
-                    erro or (
-                        "Ocorreu um erro ao tentar fechar a medição.\n"
-                        "Nenhum dado do banco foi alterado."
-                    ),
-                )
+                erro(self, "Erro no Fechamento", erro or "Ocorreu um erro ao tentar fechar a medição.\nNenhum dado do banco foi alterado.")
 
     def limpar_medicao_projeto(self):
         proj = self.projeto_atual()
@@ -1876,42 +1788,22 @@ class TelaLancamentos(QWidget):
                 "Deseja continuar?"
             )
 
-        primeiro_alerta = QMessageBox.warning(
-            self,
-            "⚠️ ATENÇÃO: Limpar Lançamentos",
-            msg,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
+        primeiro_alerta = confirmar(self, "⚠️ ATENÇÃO: Limpar Lançamentos", msg)
 
-        if primeiro_alerta != QMessageBox.Yes:
+        if not primeiro_alerta:
             return
 
-        segundo_alerta = QMessageBox.question(
-            self,
-            "Confirmação Explícita",
-            "Esta operação NÃO PODERÁ SER DESFEITA.\n\nConfirma a exclusão definitiva?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
+        segundo_alerta = confirmar(self, "Confirmação Explícita", "Esta operação NÃO PODERÁ SER DESFEITA.\n\nConfirma a exclusão definitiva?")
 
-        if segundo_alerta == QMessageBox.Yes:
+        if segundo_alerta:
             sucesso, erro = database.limpar_lancamentos_projeto(
                 nome_projeto=proj, ciclo_id=ciclo_id
             )
             if sucesso:
-                QMessageBox.information(
-                    self,
-                    "Lançamentos Removidos",
-                    f"Lançamentos removidos com sucesso ({nome_aba})."
-                )
+                informar(self, "Lançamentos Removidos", f"Lançamentos removidos com sucesso ({nome_aba}).")
                 if ciclo_id:
                     self.ciclo_id_ativo = None
                 self.fechar_formulario()
                 self.carregar_dados_tabela()
             else:
-                QMessageBox.critical(
-                    self,
-                    "Erro ao Limpar",
-                    erro or "Não foi possível remover os lançamentos do banco de dados.",
-                )
+                erro(self, "Erro ao Limpar", erro or "Não foi possível remover os lançamentos do banco de dados.")

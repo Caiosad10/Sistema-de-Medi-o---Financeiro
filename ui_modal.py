@@ -67,21 +67,41 @@ class _ModalGlass(QWidget):
         self._botoes = botoes
         self.resultado = None
         self._fundo = None
+        self._fundo_label = None
+        self._overlay = None
         self._loop = None
 
-        # Captura o fundo DESFOCADO ANTES de montar o painel
+        # Define a geometria ANTES de montar o painel, para que
+        # self.width()/self.height() tenham o tamanho correto.
+        if janela is not None:
+            self.setGeometry(janela.rect())
+        else:
+            self.resize(600, 400)
+
+        # Captura o fundo DESFOCADO DEPOIS de ter geometria
         self._fundo = _capturar_desfocado(janela)
 
         self._montar_painel(titulo, mensagem, tipo, botoes)
 
-        # Cobra toda a area da janela pai como overlay interno
         if janela is not None:
-            self.setGeometry(janela.rect())
             janela.installEventFilter(self)
-        else:
-            self.resize(600, 400)
 
     def _montar_painel(self, titulo, mensagem, tipo, botoes):
+        # Camada 1: fundo desfocado da janela principal
+        if self._fundo and not self._fundo.isNull():
+            self._fundo_label = QLabel(self)
+            self._fundo_label.setPixmap(self._fundo)
+            self._fundo_label.setScaledContents(True)
+            self._fundo_label.setGeometry(0, 0, self.width(), self.height())
+            self._fundo_label.lower()
+
+        # Camada 2: overlay escurecido
+        self._overlay = QWidget(self)
+        self._overlay.setStyleSheet("background-color: rgba(0, 0, 0, 160);")
+        self._overlay.setGeometry(0, 0, self.width(), self.height())
+        self._overlay.lower()
+
+        # Camada 3: painel glass central
         self.painel = QFrame(self)
         self.painel.setObjectName("painelGlass")
         self.painel.setStyleSheet("""
@@ -179,6 +199,10 @@ class _ModalGlass(QWidget):
 
     def resizeEvent(self, evento):
         super().resizeEvent(evento)
+        if hasattr(self, '_fundo_label') and self._fundo_label is not None:
+            self._fundo_label.setGeometry(0, 0, self.width(), self.height())
+        if hasattr(self, '_overlay') and self._overlay is not None:
+            self._overlay.setGeometry(0, 0, self.width(), self.height())
         if hasattr(self, 'painel') and self.painel is not None:
             self._centralizar_painel()
 
@@ -220,6 +244,26 @@ def erro(janela, titulo, mensagem):
     """Modal de erro. Só 'Ok'."""
     d = _ModalGlass(janela, titulo, mensagem, "erro", [("Ok", "ok")])
     d.exec()
+
+
+def importacao_pc(janela, mensagem, tipo_icone="info", com_botao_cadastro=True):
+    """
+    Resultado da importação de PDF de PC.
+    Botões: ['Ir para Cadastros', 'Continuar no lançamento'] (se prestador não cadastrado)
+    ou ['Ok'] (caso contrário).
+    Retorna True se clicou em 'Ir para Cadastros', False caso contrário.
+    """
+    if com_botao_cadastro:
+        d = _ModalGlass(
+            janela,
+            "Importação de PC",
+            mensagem,
+            tipo_icone,
+            [("Ir para Cadastros", "cadastro"), ("Continuar no lançamento", "ok")],
+        )
+        return d.exec() == "cadastro"
+    informar(janela, "Importação de PC", mensagem)
+    return False
 
 
 def planilha_pronta(janela, caminho_arquivo, total_medicao, proj):
