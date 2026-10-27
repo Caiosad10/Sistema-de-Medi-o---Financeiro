@@ -16,7 +16,7 @@ Uso:
 import os
 
 from PySide6.QtCore import Qt, QEvent, QEventLoop
-from PySide6.QtGui import QPixmap, QImage, QPainter, QColor
+from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QGraphicsScene, QGraphicsPixmapItem, QGraphicsBlurEffect,
@@ -119,7 +119,7 @@ class _ModalGlass(QWidget):
             QLabel#tituloModal { font-size: 15px; font-weight: 800; }
             QLabel#textoModal { color: #cbd5e1; font-size: 13px; }
             QPushButton {
-                background-color: #3b82f6;
+                background-color: #6d5dd3;
                 color: #ffffff;
                 font-weight: 700;
                 font-size: 13px;
@@ -128,7 +128,7 @@ class _ModalGlass(QWidget):
                 padding: 8px 20px;
                 min-width: 90px;
             }
-            QPushButton:hover { background-color: #2563eb; }
+            QPushButton:hover { background-color: #5b4bc4; }
             QPushButton#btnSecundario {
                 background-color: transparent;
                 color: #94a3b8;
@@ -178,6 +178,26 @@ class _ModalGlass(QWidget):
         self.painel.raise_()
 
     def eventFilter(self, origem, evento):
+        if self._loop is not None:
+            et = evento.type()
+            # Impede que QShortcut da janela "robe" o Esc antes do KeyPress
+            if et == QEvent.Type.ShortcutOverride:
+                key = evento.key()
+                if key in (
+                    Qt.Key.Key_Escape,
+                    Qt.Key.Key_Return,
+                    Qt.Key.Key_Enter,
+                ):
+                    evento.accept()
+                    return True
+            if et == QEvent.Type.KeyPress:
+                key = evento.key()
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    self._confirmar_principal()
+                    return True
+                if key == Qt.Key.Key_Escape:
+                    self._cancelar_ou_fechar()
+                    return True
         if origem is self._janela and evento.type() == QEvent.Type.Resize:
             self.setGeometry(self._janela.rect())
             self._centralizar_painel()
@@ -211,12 +231,80 @@ class _ModalGlass(QWidget):
         if self._loop is not None:
             self._loop.quit()
 
+    def _confirmar_principal(self):
+        for _texto, papel in self._botoes:
+            if papel != "cancelar":
+                self._fechar(papel)
+                return
+        if self._botoes:
+            self._fechar(self._botoes[0][1])
+
+    def _cancelar_ou_fechar(self):
+        for _texto, papel in self._botoes:
+            if papel == "cancelar":
+                self._fechar(papel)
+                return
+        # Modal só com Ok → Esc fecha como Ok
+        if self._botoes:
+            self._fechar(self._botoes[-1][1])
+
+    def keyPressEvent(self, evento):
+        """Enter/Return confirma; Esc cancela/fecha."""
+        key = evento.key()
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._confirmar_principal()
+            return
+        if key == Qt.Key.Key_Escape:
+            self._cancelar_ou_fechar()
+            return
+        super().keyPressEvent(evento)
+
     def exec(self):
+        app = QApplication.instance()
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_KeyCompression, False)
+
+        # Desliga atalhos da janela (Esc do form, Ctrl+N, etc.) enquanto o modal vive
+        atalhos_desligados = []
+        raiz = self._janela.window() if self._janela is not None else self._janela
+        if raiz is not None:
+            for sc in raiz.findChildren(QShortcut):
+                atalhos_desligados.append((sc, sc.isEnabled()))
+                sc.setEnabled(False)
+
         self.show()
         self.raise_()
+        self.activateWindow()
         self.painel.raise_()
+        # Foco no botão principal (Sim/Ok)
+        for btn in self.painel.findChildren(QPushButton):
+            if btn.objectName() != "btnSecundario":
+                btn.setFocus(Qt.FocusReason.OtherFocusReason)
+                break
+        else:
+            self.setFocus(Qt.FocusReason.OtherFocusReason)
+
         self._loop = QEventLoop()
-        self._loop.exec()
+        if app is not None:
+            app.installEventFilter(self)
+        try:
+            self.grabKeyboard()
+        except Exception:
+            pass
+        try:
+            self._loop.exec()
+        finally:
+            try:
+                self.releaseKeyboard()
+            except Exception:
+                pass
+            if app is not None:
+                app.removeEventFilter(self)
+            for sc, ligado in atalhos_desligados:
+                try:
+                    sc.setEnabled(ligado)
+                except Exception:
+                    pass
         resultado = self.resultado
         self.deleteLater()
         return resultado

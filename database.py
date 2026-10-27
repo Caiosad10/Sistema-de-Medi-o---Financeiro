@@ -1328,13 +1328,10 @@ def limpar_lancamentos_projeto(nome_projeto="PROJETO AEV", ciclo_id=None):
                 )
 
             if ciclo_id is not None:
+                # Recomeçar aba: só zera lançamentos do ciclo; mantém a aba aberta
                 cursor.execute(
                     "DELETE FROM lancamentos WHERE projeto_id = ? AND ciclo_id = ?",
                     (projeto_id, ciclo_id),
-                )
-                cursor.execute(
-                    "UPDATE ciclos SET aberto = 0 WHERE id = ?",
-                    (ciclo_id,),
                 )
             else:
                 cursor.execute(
@@ -1550,6 +1547,43 @@ def carregar_estatisticas_projeto(nome_projeto="PROJETO AEV", prestador_filtro=N
             "totais": totais,
             "prestadores": prestadores
         }
+
+
+def carregar_historico_prestador(nome_projeto="PROJETO AEV", prestador=None, tipo_ciclo=None):
+    """Linhas do histórico de um prestador (para detalhe quando filtro Tipo != Todos)."""
+    if not prestador:
+        return []
+    with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        query = f"""
+        SELECT
+            h.pc AS "PC",
+            h.prestador AS "PRESTADOR",
+            h.atividade AS "ATIVIDADE",
+            COALESCE(h.valor_total, 0) AS "VALOR TOTAL DO PC",
+            COALESCE(h.valor_liquido, 0) AS "VALOR LÍQUIDO",
+            COALESCE(h.valores_pagos, 0) AS "VALORES PAGOS",
+            COALESCE(h.saldo_a_pagar, 0) AS "SALDO A PAGAR",
+            COALESCE(h.valor_a_pagar, h.valor_medido, 0) AS "VALOR A PAGAR",
+            COALESCE(h.saldo_aberto, 0) AS "SALDO ABERTO",
+            COALESCE(h.status_pc, '') AS "STATUS PC",
+            COALESCE(h.oc, '') AS "OC",
+            COALESCE(h.end_id, '') AS "END ID",
+            COALESCE(h.nota_fiscal, '') AS "NOTA FISCAL",
+            COALESCE(h.regional, '') AS "REGIONAL"
+        FROM historico_medicoes h
+        JOIN projetos p ON h.projeto_id = p.id
+        WHERE p.nome = ? AND h.prestador = ?
+        """
+        params = [nome_projeto, prestador]
+        if tipo_ciclo:
+            query += " AND COALESCE(h.tipo_ciclo, 'NOVA_MEDICAO') = ?"
+            params.append(tipo_ciclo)
+        query += " ORDER BY h.data_fechamento DESC, h.id DESC"
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
 
 def carregar_lancamentos_prestador(nome_projeto="PROJETO AEV", prestador=None):
     """Carrega os lançamentos de um prestador específico"""

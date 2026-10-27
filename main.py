@@ -1,15 +1,51 @@
 import sys
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
-    QPushButton, QStackedWidget, QLabel, QFrame
+    QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
+    QPushButton, QStackedWidget, QFrame
 )
-from PySide6.QtCore import Qt
-import database  # Importando o arquivo que construímos!
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QIcon
+from ui_icons import icone
+import database
 from versao import VERSAO
-# Importando as telas que já construímos
 from ui_cadastro import TelaCadastro
 from ui_lancamentos import TelaLancamentos
 from ui_medicoes_fechadas import TelaMedicoesFechadas
+
+
+class FundoAurora(QWidget):
+    """Fundo navy/roxo com ondas suaves (paleta Citra - estilo mockup)."""
+
+    def paintEvent(self, _evento):
+        from PySide6.QtGui import QPainter, QLinearGradient, QPainterPath, QColor
+        p = QPainter(self)
+        w, h = self.width(), self.height()
+
+        grad = QLinearGradient(0, 0, w, h)
+        grad.setColorAt(0.0, QColor("#0b0b2b"))
+        grad.setColorAt(0.5, QColor("#151038"))
+        grad.setColorAt(1.0, QColor("#0b0b2b"))
+        p.fillRect(self.rect(), grad)
+
+        for opac, y_base, ampl in ((36, 0.72, 90), (24, 0.86, 70), (18, 0.60, 110)):
+            path = QPainterPath()
+            path.moveTo(0, h * y_base)
+            path.cubicTo(
+                w * 0.3, h * y_base - ampl,
+                w * 0.65, h * y_base + ampl * 0.7,
+                w, h * y_base - ampl * 0.4,
+            )
+            path.lineTo(w, h)
+            path.lineTo(0, h)
+            path.closeSubpath()
+            p.fillPath(path, QColor(109, 93, 211, opac))
+
+        grad_topo = QLinearGradient(0, 0, 0, h * 0.35)
+        grad_topo.setColorAt(0, QColor(139, 124, 240, 26))
+        grad_topo.setColorAt(1, QColor(139, 124, 240, 0))
+        p.fillRect(0, 0, w, int(h * 0.35), grad_topo)
+        p.end()
+
 
 class JanelaPrincipal(QMainWindow):
     def __init__(self):
@@ -17,96 +53,95 @@ class JanelaPrincipal(QMainWindow):
         self.setWindowTitle(f"Sistema de Gerenciamento de Medições e Pagamentos - v{VERSAO}")
         self.resize(1280, 720)
 
-        # ===== CORREÇÃO CRÍTICA: Inicializa o banco de dados =====
         database.inicializar_banco()
 
-        # Container Principal (Layout Horizontal: Sidebar + Conteúdo)
         widget_central = QWidget()
         self.setCentralWidget(widget_central)
+
+        self._aurora = FundoAurora(widget_central)
+        self._aurora.setGeometry(widget_central.rect())
+        self._aurora.lower()
+
         layout_principal = QHBoxLayout(widget_central)
         layout_principal.setContentsMargins(0, 0, 0, 0)
         layout_principal.setSpacing(0)
 
-        # --- BARRA LATERAL DE NAVEGAÇÃO (SIDEBAR - BENTO UI) ---
-        sidebar = QFrame()
-        sidebar.setFixedWidth(240)
-        sidebar.setStyleSheet("""
-            QFrame {
-                background-color: #0f172a;
-                border-right: 1px solid #1e293b;
-            }
-            QLabel {
-                color: #f8fafc;
-                font-weight: bold;
-                font-size: 14px;
-                padding: 10px;
-            }
-            QPushButton {
-                background-color: transparent;
-                color: #94a3b8;
-                text-align: left;
-                padding: 12px 20px;
-                font-size: 13px;
-                font-weight: 600;
-                border: none;
-                border-radius: 8px;
-                margin: 4px 10px;
-            }
-            QPushButton:hover {
-                background-color: #1e293b;
-                color: #f8fafc;
-            }
-            QPushButton:checked {
-                background-color: #3b82f6;
-                color: #ffffff;
+        # --- RAIL LATERAL (só atalhos; sem menu flutuante) ---
+        # luz(3) + gap(6) + botão(40) + margens ≈ 68
+        LARGURA_RAIL = 72
+        rail = QFrame()
+        rail.setObjectName("railGlass")
+        rail.setFixedWidth(LARGURA_RAIL)
+        rail.setStyleSheet("""
+            QFrame#railGlass {
+                background-color: rgba(12, 18, 40, 165);
+                border-right: 1px solid rgba(148, 163, 184, 55);
             }
         """)
+        layout_rail = QVBoxLayout(rail)
+        layout_rail.setContentsMargins(8, 20, 10, 14)
+        layout_rail.setSpacing(12)
 
-        layout_sidebar = QVBoxLayout(sidebar)
-        layout_sidebar.setContentsMargins(10, 20, 10, 20)
+        self._rail_mapa = []  # [(botao, chave, luz)]
 
-        # Título da Sidebar
-        lbl_titulo = QLabel("MEDIÇÃO - CITRA")
-        lbl_titulo.setAlignment(Qt.AlignCenter)
-        layout_sidebar.addWidget(lbl_titulo)
+        def _btn_rail(nome, tooltip, chamada, chave):
+            wrap = QWidget()
+            wrap.setFixedHeight(44)
+            row = QHBoxLayout(wrap)
+            row.setContentsMargins(0, 2, 0, 2)
+            row.setSpacing(6)
 
-        # Divisor
-        divisor = QFrame()
-        divisor.setFrameShape(QFrame.HLine)
-        divisor.setStyleSheet("background-color: #1e293b; margin-bottom: 15px;")
-        layout_sidebar.addWidget(divisor)
+            # Luz fora do quadrado (no próprio rail)
+            luz = QFrame()
+            luz.setFixedSize(3, 28)
+            luz.setStyleSheet("background: transparent; border: none; border-radius: 2px;")
+            row.addWidget(luz, 0, Qt.AlignVCenter)
 
-        # Botões do Menu (ordem = frequência de uso)
-        self.btn_lancamentos = QPushButton("📊 Lançamentos")
-        self.btn_lancamentos.setCheckable(True)
-        self.btn_lancamentos.setChecked(True)
-        self.btn_lancamentos.clicked.connect(lambda: self.mudar_tela(0))
+            b = QPushButton()
+            b.setFixedSize(40, 40)
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setToolTip(tooltip)
+            b.setIcon(icone(nome, "#94a3b8", 22, cor_ativo="#ffffff"))
+            b.setIconSize(QSize(22, 22))
+            b.setStyleSheet("""
+                QPushButton {
+                    background: transparent;
+                    border: none;
+                    border-radius: 11px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(255, 255, 255, 28);
+                }
+                QPushButton:checked {
+                    background-color: rgba(109, 93, 211, 220);
+                }
+            """)
+            b.clicked.connect(chamada)
+            row.addWidget(b, 0, Qt.AlignVCenter)
+            layout_rail.addWidget(wrap)
+            self._rail_mapa.append((b, chave, luz))
+            return b
 
-        self.btn_cadastro = QPushButton("📋 Cadastros")
-        self.btn_cadastro.setCheckable(True)
-        self.btn_cadastro.clicked.connect(lambda: self.mudar_tela(1))
+        _btn_rail("lista", "Lançamentos", lambda: self.mudar_tela(0), (0, None))
+        _btn_rail("pessoa", "Cadastros", lambda: self.mudar_tela(1), (1, None))
+        _btn_rail("documento", "Medições Fechadas", lambda: self.mudar_tela(2, 0), (2, 0))
+        _btn_rail("grafico", "Estatísticas", lambda: self.mudar_tela(2, 1), (2, 1))
+        layout_rail.addStretch()
 
-        self.btn_medicoes = QPushButton("📈 Medições Fechadas")
-        self.btn_medicoes.setCheckable(True)
-        self.btn_medicoes.clicked.connect(lambda: self.mudar_tela(2))
-
-        layout_sidebar.addWidget(self.btn_lancamentos)
-        layout_sidebar.addWidget(self.btn_cadastro)
-        layout_sidebar.addWidget(self.btn_medicoes)
-        layout_sidebar.addStretch()
-
-        # --- ÁREA CENTRAL DE CONTEÚDO (STACKED WIDGET) ---
+        # --- ÁREA CENTRAL ---
         self.paginas = QStackedWidget()
-        self.paginas.setStyleSheet("background-color: #020617;")
+        self.paginas.setStyleSheet("background-color: transparent;")
 
         self.tela_lancamentos = TelaLancamentos()
         self.tela_cadastro = TelaCadastro()
         self.tela_medicoes_fechadas = TelaMedicoesFechadas()
 
-        # Stack alinhado ao menu (Lançamentos = tela inicial)
-        self.paginas.addWidget(self.tela_lancamentos)        # Índice 0
-        self.paginas.addWidget(self.tela_cadastro)          # Índice 1
-        self.paginas.addWidget(self.tela_medicoes_fechadas)   # Índice 2
+        self.paginas.addWidget(self.tela_lancamentos)         # 0
+        self.paginas.addWidget(self.tela_cadastro)           # 1
+        self.paginas.addWidget(self.tela_medicoes_fechadas)  # 2
+
+        self.tela_medicoes_fechadas.tabs.currentChanged.connect(self._aba_medicoes_trocou)
 
         self.setStyleSheet("""
             QMessageBox {
@@ -117,7 +152,7 @@ class JanelaPrincipal(QMainWindow):
                 font-size: 13px;
             }
             QMessageBox QPushButton {
-                background-color: #3b82f6;
+                background-color: #6d5dd3;
                 color: white;
                 border-radius: 6px;
                 padding: 6px 16px;
@@ -125,19 +160,43 @@ class JanelaPrincipal(QMainWindow):
                 min-width: 80px;
             }
             QMessageBox QPushButton:hover {
-                background-color: #2563eb;
+                background-color: #5b4bc4;
             }
         """)
 
-        # Adicionando Sidebar e Conteúdo ao Layout Principal
-        layout_principal.addWidget(sidebar)
+        layout_principal.addWidget(rail)
         layout_principal.addWidget(self.paginas)
 
-    def mudar_tela(self, indice):
+        self._atualizar_rail()
+
+    def _atualizar_rail(self):
+        """Destaca no rail o botão ativo e acende a luz fora do quadrado."""
+        idx = self.paginas.currentIndex()
+        if idx == 2:
+            chave = (2, self.tela_medicoes_fechadas.tabs.currentIndex())
+        else:
+            chave = (idx, None)
+        for b, c, luz in self._rail_mapa:
+            ativo = c == chave
+            b.setChecked(ativo)
+            if ativo:
+                luz.setStyleSheet(
+                    "background-color: #c4b5fd; border: none; border-radius: 2px;"
+                )
+            else:
+                luz.setStyleSheet(
+                    "background: transparent; border: none; border-radius: 2px;"
+                )
+
+    def _aba_medicoes_trocou(self, _idx):
+        if self.paginas.currentIndex() == 2:
+            self._atualizar_rail()
+
+    def mudar_tela(self, indice, aba_medicoes=None):
         self.paginas.setCurrentIndex(indice)
-        self.btn_lancamentos.setChecked(indice == 0)
-        self.btn_cadastro.setChecked(indice == 1)
-        self.btn_medicoes.setChecked(indice == 2)
+        if indice == 2 and aba_medicoes is not None:
+            self.tela_medicoes_fechadas.tabs.setCurrentIndex(aba_medicoes)
+        self._atualizar_rail()
 
         if indice == 0:
             self.tela_lancamentos.carregar_fornecedores_combo()
@@ -147,10 +206,16 @@ class JanelaPrincipal(QMainWindow):
         elif indice == 2:
             self.tela_medicoes_fechadas.recarregar()
 
+    def resizeEvent(self, evento):
+        super().resizeEvent(evento)
+        if getattr(self, "_aurora", None) is not None:
+            self._aurora.setGeometry(self.centralWidget().rect())
+            self._aurora.lower()
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")  # <-- TRAVA O RENDERIZADOR NATIVO PARA EVITAR BUGS DE TEMA DO WINDOWS
+    app.setStyle("Fusion")
     janela = JanelaPrincipal()
     janela.show()
     sys.exit(app.exec())

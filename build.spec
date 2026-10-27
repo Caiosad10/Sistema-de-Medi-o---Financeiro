@@ -1,6 +1,8 @@
+from PyInstaller.utils.hooks import collect_data_files
+
 # -*- mode: python ; coding: utf-8 -*-
 
-exe_name = "SisMed v3.6"
+exe_name = "SisMed v2.5"
 
 additional_files = [
     ('TEMPLATE_MEDICAO_AEV_LIMPO_V2_VALIDADO.xlsx', '.'),
@@ -11,14 +13,15 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=additional_files,
+    datas=additional_files + collect_data_files('qtawesome'),
     hiddenimports=[
         'PySide6.QtCore',
         'PySide6.QtGui',
         'PySide6.QtWidgets',
         'openpyxl',
-        'pypdf',
         'sqlite3',
+        'qtawesome',
+        'pypdf',
     ],
     hookspath=[],
     hooksconfig={},
@@ -46,7 +49,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='sismed_icon.ico',
 )
 
 coll = COLLECT(

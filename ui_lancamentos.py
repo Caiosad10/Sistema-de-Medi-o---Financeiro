@@ -3,15 +3,17 @@ from PySide6.QtWidgets import (
     QRadioButton, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, 
     QLineEdit, QComboBox, QPushButton, QTableWidget, QTableWidgetItem, 
     QHeaderView, QFrame, QFileDialog, QApplication, QCompleter,
-    QTabBar, QDialog, QDialogButtonBox, QSizePolicy, QMenu, QInputDialog
+    QTabBar, QDialog, QDialogButtonBox, QSizePolicy, QMenu, QInputDialog,
+    QGraphicsDropShadowEffect
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, QSize, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QShortcut
 import database
 import utils
 from utils import str_para_float
 from ui_modal import confirmar, informar, alerta, erro, planilha_pronta, importacao_pc
 from pc_pdf_reader import importar_pc_medicao, match_prestador_cadastrado
+from ui_icons import pixmap_icone, icone
 
 class TelaLancamentos(QWidget):
     def __init__(self):
@@ -27,6 +29,7 @@ class TelaLancamentos(QWidget):
         self._animacao_glow = None
         self._glow_frame_idx = 0
         self.init_ui()
+        self._registrar_atalhos()
         self.carregar_projetos_combo()
         self.carregar_fornecedores_combo()
         self.carregar_dados_tabela()
@@ -40,27 +43,42 @@ class TelaLancamentos(QWidget):
         layout_topo_projeto = QHBoxLayout()
         
         lbl_icone = QLabel("📂 Projeto Ativo:")
-        lbl_icone.setStyleSheet("color: #94a3b8; font-weight: bold; font-size: 14px;")
+        lbl_icone.setStyleSheet("color: #f8fafc; font-weight: bold; font-size: 14px;")
         
         self.combo_projeto = QComboBox()
         self.combo_projeto.setStyleSheet("""
             QComboBox {
-                background-color: #1e293b;
-                color: #38bdf8;
-                font-weight: bold;
-                font-size: 14px;
-                border: 2px solid #3b82f6;
-                border-radius: 8px;
-                padding: 6px 15px;
-                min-width: 220px;
+                background-color: rgba(30, 64, 175, 190);
+                color: #ffffff;
+                font-weight: 800;
+                font-size: 13px;
+                letter-spacing: 0.3px;
+                border: 1px solid rgba(96, 165, 250, 220);
+                border-radius: 14px;
+                padding: 8px 18px;
+                min-width: 200px;
+                min-height: 22px;
             }
-            QComboBox::drop-down { border: none; }
+            QComboBox:hover {
+                background-color: rgba(37, 99, 235, 220);
+                border: 1px solid rgba(147, 197, 253, 255);
+            }
+            QComboBox::drop-down { border: none; width: 28px; }
+            QComboBox::down-arrow { image: none; border: none; width: 0; height: 0; }
             QComboBox QAbstractItemView {
                 background-color: #0f172a;
                 color: #f8fafc;
                 selection-background-color: #3b82f6;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                padding: 4px;
             }
         """)
+        glow_combo = QGraphicsDropShadowEffect(self.combo_projeto)
+        glow_combo.setBlurRadius(22)
+        glow_combo.setOffset(0, 0)
+        glow_combo.setColor(QColor(59, 130, 246, 160))
+        self.combo_projeto.setGraphicsEffect(glow_combo)
         self.combo_projeto.currentIndexChanged.connect(self.mudar_projeto_ativo)
 
         layout_topo_projeto.addWidget(lbl_icone)
@@ -78,21 +96,28 @@ class TelaLancamentos(QWidget):
         self.lbl_total_medicao.setTextFormat(Qt.RichText)
         self.lbl_total_medicao.setStyleSheet("""
             QLabel {
-                background-color: #1e293b;
-                border: 2px solid #3b82f6;
-                border-radius: 8px;
-                padding: 6px 15px;
-                font-size: 14px;
+                background-color: rgba(30, 58, 138, 175);
+                border: 1px solid rgba(96, 165, 250, 160);
+                border-radius: 14px;
+                padding: 8px 18px;
+                font-size: 13px;
+                font-weight: 600;
+                min-height: 22px;
             }
         """)
+        glow_total = QGraphicsDropShadowEffect(self.lbl_total_medicao)
+        glow_total.setBlurRadius(18)
+        glow_total.setOffset(0, 0)
+        glow_total.setColor(QColor(59, 130, 246, 120))
+        self.lbl_total_medicao.setGraphicsEffect(glow_total)
         layout_topo_projeto.addWidget(self.lbl_total_medicao)
 
         layout_principal.addLayout(layout_topo_projeto)
 
         # --- 0.1 BARRA DE ABAS (ciclos de medição) ---
         layout_abas = QHBoxLayout()
-        layout_abas.setContentsMargins(0, 0, 0, 0)
-        layout_abas.setSpacing(6)
+        layout_abas.setContentsMargins(0, 2, 0, 4)
+        layout_abas.setSpacing(8)
 
         self.tab_ciclos = QTabBar()
         self.tab_ciclos.setExpanding(False)
@@ -100,25 +125,32 @@ class TelaLancamentos(QWidget):
         self.tab_ciclos.setMovable(False)
         self.tab_ciclos.setTabsClosable(False)
         self.tab_ciclos.setStyleSheet("""
+            QTabBar {
+                background: transparent;
+            }
             QTabBar::tab {
-                background-color: #1e293b;
+                background-color: rgba(30, 41, 59, 160);
                 color: #94a3b8;
-                padding: 8px 16px;
-                margin-right: 4px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                font-weight: 600;
+                padding: 8px 20px;
+                margin-right: 8px;
+                margin-top: 2px;
+                margin-bottom: 2px;
+                border-radius: 12px;
+                font-weight: 700;
                 font-size: 12px;
-                border: 1px solid #334155;
-                border-bottom: none;
+                border: 1px solid rgba(148, 163, 184, 55);
+                min-height: 20px;
             }
             QTabBar::tab:selected {
-                background-color: #3b82f6;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #3b82f6, stop:1 #6366f1);
                 color: #ffffff;
+                border: 1px solid rgba(147, 197, 253, 180);
             }
             QTabBar::tab:hover:!selected {
-                background-color: #334155;
-                color: #f8fafc;
+                background-color: rgba(51, 65, 85, 200);
+                color: #e2e8f0;
+                border: 1px solid rgba(148, 163, 184, 90);
             }
         """)
         self.tab_ciclos.currentChanged.connect(self.on_aba_alterada)
@@ -127,18 +159,23 @@ class TelaLancamentos(QWidget):
         self.tab_ciclos.customContextMenuRequested.connect(self.on_aba_menu_contexto)
 
         self.btn_nova_aba = QPushButton("+")
-        self.btn_nova_aba.setFixedSize(32, 32)
+        self.btn_nova_aba.setFixedSize(36, 36)
         self.btn_nova_aba.setToolTip("Nova aba de medição")
         self.btn_nova_aba.setStyleSheet("""
             QPushButton {
-                background-color: #1e293b;
-                color: #38bdf8;
-                font-weight: bold;
+                background-color: rgba(30, 41, 59, 170);
+                color: #93c5fd;
+                font-weight: 800;
                 font-size: 18px;
-                border: 1px solid #334155;
-                border-radius: 8px;
+                border: 1px solid rgba(96, 165, 250, 120);
+                border-radius: 12px;
             }
-            QPushButton:hover { background-color: #3b82f6; color: #ffffff; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #3b82f6, stop:1 #6366f1);
+                color: #ffffff;
+                border: 1px solid rgba(147, 197, 253, 200);
+            }
         """)
         self.btn_nova_aba.clicked.connect(self.criar_nova_aba)
 
@@ -149,9 +186,23 @@ class TelaLancamentos(QWidget):
 
         # --- 1. DASHBOARD DE STATUS (GRADIENTES BENTO UI) ---
         layout_cards = QHBoxLayout()
-        self.lbl_card_mobilizacao = self.criar_card("Status: Mobilização", "R$ 0,00", "#b45309", "#78350f", "#f59e0b")
-        self.lbl_card_adiantamento = self.criar_card("Status: Adiantamento", "R$ 0,00", "#1d4ed8", "#1e3a8a", "#60a5fa")
-        self.lbl_card_conclusao = self.criar_card("Status: Conclusão", "R$ 0,00", "#6d28d9", "#4c1d95", "#a78bfa")
+        # Cores alinhadas às pílulas da tabela (mesma leitura visual / daltonismo)
+        # MOBILIZ. = teal | ADIANT. = âmbar | CONCL. = roxo
+        self.lbl_card_mobilizacao = self.criar_card(
+            "Status: Mobilização", "R$ 0,00",
+            "rgba(20, 184, 166, 185)", "rgba(15, 118, 110, 155)",
+            "rgba(45, 212, 191, 140)", "capacete",
+        )
+        self.lbl_card_adiantamento = self.criar_card(
+            "Status: Adiantamento", "R$ 0,00",
+            "rgba(245, 158, 11, 185)", "rgba(180, 83, 9, 155)",
+            "rgba(251, 191, 36, 140)", "moeda",
+        )
+        self.lbl_card_conclusao = self.criar_card(
+            "Status: Conclusão", "R$ 0,00",
+            "rgba(139, 92, 246, 185)", "rgba(91, 33, 182, 155)",
+            "rgba(196, 181, 253, 140)", "check",
+        )
 
         # Guarda os frames e torna clicáveis
         frame_mob = self.lbl_card_mobilizacao.parentWidget()
@@ -184,67 +235,75 @@ class TelaLancamentos(QWidget):
         # --- 2. BARRA DE AÇÕES (Botões e Campo de Busca) ---
         layout_acoes = QHBoxLayout()
         
-        self.btn_novo = QPushButton("+ Novo Lançamento")
+        self.btn_novo = QPushButton("Novo Lançamento")
+        self.btn_novo.setIcon(icone("mais", "#ffffff", 16))
+        self.btn_novo.setIconSize(QSize(16, 16))
         self.btn_novo.setStyleSheet("""
             QPushButton {
-                background-color: #10b981;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #34d399, stop:1 #10b981);
                 color: #ffffff;
-                font-weight: 700;
+                font-weight: 800;
                 font-size: 13px;
-                border: none;
-                border-radius: 8px;
-                padding: 8px 16px;
+                border: 1px solid rgba(255, 255, 255, 45);
+                border-radius: 12px;
+                padding: 10px 18px;
             }
-            QPushButton:hover { background-color: #059669; }
+            QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #10b981, stop:1 #059669); }
             QPushButton:pressed { background-color: #047857; }
         """)
         self.btn_novo.clicked.connect(self.abrir_formulario_novo)
         
-        self.btn_exportar = QPushButton("📥 Exportar Financeiro")
+        self.btn_exportar = QPushButton("Exportar Financeiro")
+        self.btn_exportar.setIcon(icone("download", "#ffffff", 16))
+        self.btn_exportar.setIconSize(QSize(16, 16))
         self.btn_exportar.setStyleSheet("""
             QPushButton {
-                background-color: #0284c7;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #a78bfa, stop:1 #6d5dd3);
                 color: #ffffff;
-                font-weight: 700;
+                font-weight: 800;
                 font-size: 13px;
-                border: none;
-                border-radius: 8px;
-                padding: 8px 16px;
+                border: 1px solid rgba(255, 255, 255, 45);
+                border-radius: 12px;
+                padding: 10px 18px;
             }
-            QPushButton:hover { background-color: #0369a1; }
-            QPushButton:pressed { background-color: #075985; }
+            QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #6d5dd3, stop:1 #4f3fb0); }
+            QPushButton:pressed { background-color: #3f3196; }
         """)
         self.btn_exportar.clicked.connect(self.exportar_excel)
 
-        self.btn_fechar_medicao = QPushButton("🔒 Fechar Medição")
+        self.btn_fechar_medicao = QPushButton("Fechar Medição")
+        self.btn_fechar_medicao.setIcon(icone("cadeado", "#ffffff", 16))
+        self.btn_fechar_medicao.setIconSize(QSize(16, 16))
         self.btn_fechar_medicao.setStyleSheet("""
             QPushButton {
-                background-color: #8b5cf6;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #a78bfa, stop:1 #8b5cf6);
                 color: #ffffff;
-                font-weight: 700;
+                font-weight: 800;
                 font-size: 13px;
-                border: none;
-                border-radius: 8px;
-                padding: 8px 16px;
+                border: 1px solid rgba(255, 255, 255, 45);
+                border-radius: 12px;
+                padding: 10px 18px;
             }
-            QPushButton:hover { background-color: #7c3aed; }
+            QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #8b5cf6, stop:1 #7c3aed); }
             QPushButton:pressed { background-color: #6d28d9; }
         """)
         self.btn_fechar_medicao.clicked.connect(self.fechar_medicao)
 
-        self.btn_limpar_projeto = QPushButton("🧹 Recomeçar Medição")
+        self.btn_limpar_projeto = QPushButton("Recomeçar Medição")
+        self.btn_limpar_projeto.setIcon(icone("reiniciar", "#ffffff", 16))
+        self.btn_limpar_projeto.setIconSize(QSize(16, 16))
         self.btn_limpar_projeto.setStyleSheet("""
             QPushButton {
-                background-color: #dc2626;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f0626e, stop:1 #e53946);
                 color: #ffffff;
-                font-weight: 700;
+                font-weight: 800;
                 font-size: 13px;
-                border: none;
-                border-radius: 8px;
-                padding: 8px 16px;
+                border: 1px solid rgba(255, 255, 255, 45);
+                border-radius: 12px;
+                padding: 10px 18px;
             }
-            QPushButton:hover { background-color: #b91c1c; }
-            QPushButton:pressed { background-color: #991b1b; }
+            QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #e53946, stop:1 #c7303b); }
+            QPushButton:pressed { background-color: #b02834; }
         """)
         self.btn_limpar_projeto.clicked.connect(self.limpar_medicao_projeto)
 
@@ -252,21 +311,23 @@ class TelaLancamentos(QWidget):
         self.txt_busca.setPlaceholderText("🔍 Buscar por PC, Prestador, Atividade, Status, NF...")
         self.txt_busca.setStyleSheet("""
             QLineEdit {
-                background-color: #1e293b;
-                color: #f8fafc;
-                border: 1px solid #334155;
-                border-radius: 8px;
-                padding: 8px 12px;
-                font-size: 13px;
+                background-color: rgba(15, 23, 42, 150);
+                color: #e2e8f0;
+                border: 1px solid rgba(148, 163, 184, 55);
+                border-radius: 14px;
+                padding: 10px 16px;
+                font-size: 12px;
+                min-width: 260px;
             }
             QLineEdit:focus {
-                border: 1px solid #38bdf8;
-                background-color: #0f172a;
+                border: 1px solid rgba(96, 165, 250, 200);
+                background-color: rgba(15, 23, 42, 210);
             }
             QLineEdit::placeholder {
                 color: #64748b;
             }
         """)
+
         self.txt_busca.textChanged.connect(self.filtrar_tabela)
 
         # Botão "Remover filtro" (mesmo estilo do dropdown/total)
@@ -274,10 +335,10 @@ class TelaLancamentos(QWidget):
         self.btn_remover_filtro.setStyleSheet("""
             QPushButton {
                 background-color: #1e293b;
-                color: #38bdf8;
+                color: #a78bfa;
                 font-weight: bold;
                 font-size: 14px;
-                border: 2px solid #3b82f6;
+                border: 2px solid #6d5dd3;
                 border-radius: 8px;
                 padding: 6px 15px;
             }
@@ -296,24 +357,76 @@ class TelaLancamentos(QWidget):
         
         layout_principal.addLayout(layout_acoes)
 
-        # --- 3. FORMULÁRIO ---
+        # --- 3. FORMULÁRIO (glass + animação expandir/recolher) ---
         self.frame_formulario = QFrame()
+        self.frame_formulario.setObjectName("formLancamento")
         self.frame_formulario.setVisible(False)
+        self.frame_formulario.setMaximumHeight(0)
+        self.frame_formulario.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.frame_formulario.setStyleSheet("""
-            QFrame { background-color: #1e293b; border-radius: 10px; padding: 15px; }
-            QLineEdit, QComboBox { background-color: #0f172a; color: #f8fafc; border: 1px solid #334155; border-radius: 6px; padding: 8px; }
-            QPushButton { background-color: #3b82f6; color: white; font-weight: bold; border-radius: 6px; padding: 10px 15px; }
-            QPushButton:hover { background-color: #2563eb; }
-            QPushButton#btn_fechar { background-color: #64748b; }
-            QPushButton#btn_fechar:hover { background-color: #475569; }
-            QPushButton#btn_excluir { background-color: #ef4444; }
-            QPushButton#btn_excluir:hover { background-color: #dc2626; }
+            QFrame#formLancamento {
+                background-color: rgba(15, 23, 42, 175);
+                border: 1px solid rgba(148, 163, 184, 55);
+                border-radius: 16px;
+            }
+            QFrame#formLancamento QLineEdit,
+            QFrame#formLancamento QComboBox {
+                background-color: rgba(15, 23, 42, 210);
+                color: #f8fafc;
+                border: 1px solid rgba(148, 163, 184, 70);
+                border-radius: 10px;
+                padding: 9px 12px;
+                font-size: 13px;
+                min-height: 18px;
+            }
+            QFrame#formLancamento QLineEdit:focus,
+            QFrame#formLancamento QComboBox:focus {
+                border: 1px solid rgba(96, 165, 250, 200);
+                background-color: rgba(15, 23, 42, 240);
+            }
+            QFrame#formLancamento QComboBox::drop-down {
+                border: none;
+                width: 24px;
+            }
+            QFrame#formLancamento QComboBox QAbstractItemView {
+                background-color: #0f172a;
+                color: #f8fafc;
+                selection-background-color: #6366f1;
+                border: 1px solid #334155;
+            }
+            QFrame#formLancamento QPushButton {
+                background-color: #6366f1;
+                color: white;
+                font-weight: 800;
+                border-radius: 10px;
+                padding: 10px 16px;
+                border: 1px solid rgba(199, 210, 254, 60);
+            }
+            QFrame#formLancamento QPushButton:hover {
+                background-color: #4f46e5;
+            }
+            QFrame#formLancamento QPushButton#btn_fechar {
+                background-color: rgba(71, 85, 105, 200);
+                border: 1px solid rgba(148, 163, 184, 70);
+            }
+            QFrame#formLancamento QPushButton#btn_fechar:hover {
+                background-color: rgba(100, 116, 139, 220);
+            }
+            QFrame#formLancamento QPushButton#btn_excluir {
+                background-color: #e11d48;
+                border: 1px solid rgba(253, 164, 175, 80);
+            }
+            QFrame#formLancamento QPushButton#btn_excluir:hover {
+                background-color: #be123c;
+            }
         """)
+        self._anim_formulario = None
         
 
         # VALOR A PAGAR
         grid = QGridLayout(self.frame_formulario)
-        grid.setSpacing(10)
+        grid.setContentsMargins(18, 16, 18, 16)
+        grid.setSpacing(12)
 
         estilo_radio_grupo = """
             QFrame {
@@ -332,8 +445,8 @@ class TelaLancamentos(QWidget):
                 height: 12px;
             }
             QRadioButton::indicator:checked {
-                background-color: #3b82f6;
-                border: 2px solid #3b82f6;
+                background-color: #6d5dd3;
+                border: 2px solid #6d5dd3;
                 border-radius: 6px;
             }
             QRadioButton::indicator:unchecked {
@@ -394,7 +507,7 @@ class TelaLancamentos(QWidget):
                 background-color: #1e293b;
                 color: #f8fafc;
                 border: 1px solid #334155;
-                selection-background-color: #3b82f6;
+                selection-background-color: #6d5dd3;
                 selection-color: #ffffff;
                 outline: 0;
                 padding: 6px;
@@ -423,7 +536,7 @@ class TelaLancamentos(QWidget):
 
         # Instanciação do Label do Preview (CORREÇÃO DO BUG DE ATRIBUTO)
         self.lbl_preview_porcentagem = QLabel("")
-        self.lbl_preview_porcentagem.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 12px; padding-left: 5px;")
+        self.lbl_preview_porcentagem.setStyleSheet("color: #a78bfa; font-weight: bold; font-size: 12px; padding-left: 5px;")
         self.lbl_preview_porcentagem.setVisible(False)
 
         self.combo_status = QComboBox(); self.combo_status.addItems(["MOBILIZAÇÃO", "ADIANT", "CONCLUSÃO"])
@@ -466,13 +579,14 @@ class TelaLancamentos(QWidget):
         self.btn_importar_pc.setToolTip("Lê um PDF de medição e preenche o formulário")
         self.btn_importar_pc.setStyleSheet("""
             QPushButton {
-                background-color: #0f766e;
+                background-color: rgba(13, 148, 136, 220);
                 color: white;
-                font-weight: bold;
-                border-radius: 6px;
-                padding: 10px 15px;
+                font-weight: 800;
+                border-radius: 10px;
+                padding: 10px 16px;
+                border: 1px solid rgba(94, 234, 212, 70);
             }
-            QPushButton:hover { background-color: #0d9488; }
+            QPushButton:hover { background-color: rgba(15, 118, 110, 240); }
         """)
         self.btn_importar_pc.clicked.connect(self.importar_pc_pdf)
 
@@ -505,6 +619,8 @@ class TelaLancamentos(QWidget):
         self.tabela.setSelectionBehavior(QTableWidget.SelectRows)
         self.tabela.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tabela.doubleClicked.connect(self.abrir_formulario_edicao)
+        self.tabela.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tabela.customContextMenuRequested.connect(self.on_tabela_menu_contexto)
 
         self.tabela.setAlternatingRowColors(False)
         self.tabela.setShowGrid(False)
@@ -513,34 +629,36 @@ class TelaLancamentos(QWidget):
         
         self.tabela.setStyleSheet("""
             QTableWidget {
-                background-color: #1e293b;
-                color: #f8fafc;
-                border: 1px solid #334155;
-                border-radius: 12px;
+                background-color: rgba(15, 23, 42, 145);
+                color: #e2e8f0;
+                border: 1px solid rgba(148, 163, 184, 45);
+                border-radius: 16px;
                 gridline-color: transparent;
-                selection-background-color: #3b82f6;
+                selection-background-color: rgba(99, 102, 241, 160);
                 selection-color: #ffffff;
+                outline: none;
             }
             QTableWidget::item {
                 padding: 8px 12px;
-                border-bottom: 1px solid #0f172a;
+                border-bottom: 1px solid rgba(148, 163, 184, 22);
             }
             QTableWidget::item:hover {
-                background-color: #334155;
-                color: #38bdf8;
+                background-color: rgba(51, 65, 85, 120);
+                color: #f8fafc;
             }
             QTableWidget::item:selected {
-                background-color: #2563eb;
+                background-color: rgba(99, 102, 241, 180);
                 color: #ffffff;
             }
             QHeaderView::section {
-                background-color: #0f172a;
+                background-color: rgba(15, 23, 42, 200);
                 color: #94a3b8;
-                font-weight: bold;
-                font-size: 12px;
-                padding: 10px;
+                font-weight: 700;
+                font-size: 11px;
+                letter-spacing: 0.4px;
+                padding: 12px 10px;
                 border: none;
-                border-bottom: 2px solid #334155;
+                border-bottom: 1px solid rgba(148, 163, 184, 50);
             }
             QScrollBar:vertical, QScrollBar:horizontal {
                 background: #1e293b;
@@ -644,25 +762,42 @@ class TelaLancamentos(QWidget):
     def exibir_alerta(self, titulo, mensagem):
         alerta(self, titulo, mensagem)
 
-    def criar_card(self, titulo, valor_inicial, cor_grad_inicio, cor_grad_fim, cor_borda):
+    def criar_card(self, titulo, valor_inicial, cor_grad_inicio, cor_grad_fim, cor_borda, icone=""):
         frame = QFrame(self)
+        frame.setMinimumHeight(78)
         frame.setStyleSheet(f"""
             QFrame {{
                 background: qlineargradient(
                     x1: 0, y1: 0, x2: 1, y2: 1,
                     stop: 0 {cor_grad_inicio},
+                    stop: 0.55 rgba(255, 255, 255, 28),
                     stop: 1 {cor_grad_fim}
                 );
-                border-radius: 12px;
+                border-radius: 16px;
                 border: 1px solid {cor_borda};
-                padding: 6px;
             }}
         """)
-        
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(15, 12, 15, 12)
-        layout.setSpacing(4)
-        
+
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(14)
+
+        # Badge circular com ícone (Dashboard)
+        if icone:
+            badge = QLabel()
+            badge.setPixmap(pixmap_icone(icone, "#ffffff", 18))
+            badge.setFixedSize(40, 40)
+            badge.setAlignment(Qt.AlignCenter)
+            badge.setStyleSheet("""
+                background-color: rgba(255, 255, 255, 38);
+                border-radius: 20px;
+                border: 1px solid rgba(255, 255, 255, 40);
+            """)
+            layout.addWidget(badge, 0, Qt.AlignVCenter)
+
+        col = QVBoxLayout()
+        col.setSpacing(2)
+
         lbl_titulo = QLabel(titulo)
         lbl_titulo.setStyleSheet("""
             QLabel {
@@ -674,21 +809,33 @@ class TelaLancamentos(QWidget):
                 border: none;
             }
         """)
-        
+
         lbl_valor = QLabel(valor_inicial)
         lbl_valor.setStyleSheet("""
             QLabel {
                 color: #ffffff;
-                font-size: 22px;
+                font-size: 20px;
                 font-weight: 800;
                 background: transparent;
                 border: none;
             }
         """)
-        
-        layout.addWidget(lbl_titulo)
-        layout.addWidget(lbl_valor)
-        
+
+        col.addWidget(lbl_titulo)
+        col.addWidget(lbl_valor)
+        layout.addLayout(col, 1)
+
+        # Chevron sutil a direita (estilo V2)
+        chevron = QLabel("›")
+        chevron.setStyleSheet("""
+            color: rgba(255, 255, 255, 170);
+            font-size: 22px;
+            font-weight: 600;
+            background: transparent;
+            border: none;
+        """)
+        layout.addWidget(chevron, 0, Qt.AlignVCenter)
+
         return lbl_valor
 
     def carregar_projetos_combo(self):
@@ -795,7 +942,7 @@ class TelaLancamentos(QWidget):
                 border: 1px solid #334155; padding: 4px;
             }
             QMenu::item { padding: 8px 24px; }
-            QMenu::item:selected { background-color: #3b82f6; }
+            QMenu::item:selected { background-color: #6d5dd3; }
         """)
         acao_editar = menu.addAction("✏️ Editar título / tipo")
         acao_excluir = menu.addAction("🗑️ Excluir aba")
@@ -822,10 +969,10 @@ class TelaLancamentos(QWidget):
                 border: 1px solid #334155; border-radius: 6px; padding: 8px;
             }
             QPushButton {
-                background-color: #3b82f6; color: white; font-weight: bold;
+                background-color: #6d5dd3; color: white; font-weight: bold;
                 border-radius: 6px; padding: 8px 16px;
             }
-            QPushButton:hover { background-color: #2563eb; }
+            QPushButton:hover { background-color: #5b4bc4; }
         """)
         layout = QVBoxLayout(dialog)
         layout.setSpacing(12)
@@ -904,10 +1051,10 @@ class TelaLancamentos(QWidget):
                 border: 1px solid #334155; border-radius: 6px; padding: 8px;
             }
             QPushButton {
-                background-color: #3b82f6; color: white; font-weight: bold;
+                background-color: #6d5dd3; color: white; font-weight: bold;
                 border-radius: 6px; padding: 8px 16px;
             }
-            QPushButton:hover { background-color: #2563eb; }
+            QPushButton:hover { background-color: #5b4bc4; }
         """)
         layout = QVBoxLayout(dialog)
         layout.setSpacing(12)
@@ -960,6 +1107,55 @@ class TelaLancamentos(QWidget):
         self.fechar_formulario()
         self.carregar_dados_tabela()
 
+
+    def _registrar_atalhos(self):
+        """Atalhos de teclado da tela de lançamentos."""
+        def _at(seq, slot, contexto=Qt.ShortcutContext.WindowShortcut):
+            # WindowShortcut: funciona mesmo após fechar modal (foco "perdido")
+            sc = QShortcut(QKeySequence(seq), self)
+            sc.setContext(contexto)
+            sc.activated.connect(slot)
+            return sc
+
+        _at("Esc", self._atalho_esc)
+        _at("Ctrl+N", self.abrir_formulario_novo)
+        _at("Ctrl+Return", self._atalho_salvar)
+        _at("Ctrl+Enter", self._atalho_salvar)
+        _at("Ctrl+I", self.importar_pc_pdf)
+        _at("Ctrl+Tab", self.criar_nova_aba)
+        _at("Ctrl+F", self.fechar_medicao)
+        _at("Ctrl+L", self.limpar_medicao_projeto)
+        _at("Ctrl+S", self.exportar_excel)
+
+    def _formulario_aberto(self):
+        return (
+            self.frame_formulario.isVisible()
+            and self.frame_formulario.maximumHeight() > 0
+        )
+
+    def _focar_campo_formulario(self, campo=None):
+        """Garante foco no formulário após abrir / fechar modal."""
+        alvo = campo or self.txt_pc
+        def _go():
+            if self._formulario_aberto():
+                alvo.setFocus(Qt.FocusReason.OtherFocusReason)
+                if hasattr(alvo, "selectAll"):
+                    try:
+                        alvo.selectAll()
+                    except Exception:
+                        pass
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(50, _go)
+        QTimer.singleShot(320, _go)  # após animação de abertura
+
+    def _atalho_esc(self):
+        if self._formulario_aberto():
+            self.fechar_formulario()
+
+    def _atalho_salvar(self):
+        if self._formulario_aberto():
+            self.salvar_registro()
+
     def garantir_ciclo_ativo(self):
         """Garante que existe um ciclo ativo; se não, oferece criar. Retorna True se ok."""
         if self.ciclo_id_ativo:
@@ -970,12 +1166,13 @@ class TelaLancamentos(QWidget):
             self.ciclo_id_ativo = ciclos[0]["id"]
             return True
 
-        resposta = confirmar(self, "Iniciar medição",
-            f"O projeto '{proj}' não possui medição aberta.\n\nDeseja criar uma nova aba agora?",
-            True | False,
-            True,
+        resposta = confirmar(
+            self,
+            "Iniciar medição",
+            f"O projeto '{proj}' não possui medição aberta.\n\n"
+            "Deseja criar uma nova aba agora?",
         )
-        if resposta != True:
+        if not resposta:
             return False
 
         resultado = self.dialog_novo_ciclo()
@@ -994,6 +1191,40 @@ class TelaLancamentos(QWidget):
         self.ciclo_id_ativo = novo_id
         self.atualizar_barra_abas()
         return True
+
+    @staticmethod
+    def _pilula_status(texto):
+        """QLabel em forma de pílula para a coluna Status (estilo Dashboard)."""
+        t = utils.limpar_texto(texto).upper()
+        if "MOBILIZA" in t:
+            fundo, frente, borda = "rgba(13, 148, 136, 210)", "#ecfeff", "rgba(45, 212, 191, 140)"
+            curto = "MOBILIZ."
+        elif "ADIANT" in t or "ADVANCE" in t:
+            fundo, frente, borda = "rgba(217, 119, 6, 210)", "#fffbeb", "rgba(251, 191, 36, 140)"
+            curto = "ADIANT."
+        elif "CONCLU" in t:
+            fundo, frente, borda = "rgba(109, 40, 217, 210)", "#f5f3ff", "rgba(167, 139, 250, 140)"
+            curto = "CONCL."
+        else:
+            fundo, frente, borda = "rgba(71, 85, 105, 160)", "#e2e8f0", "rgba(148, 163, 184, 80)"
+            curto = (texto or "—")[:10]
+        lbl = QLabel(curto)
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setFixedHeight(26)
+        lbl.setMinimumWidth(78)
+        lbl.setStyleSheet(f"""
+            QLabel {{
+                background-color: {fundo};
+                color: {frente};
+                border-radius: 11px;
+                padding: 4px 10px;
+                font-size: 10px;
+                font-weight: 800;
+                letter-spacing: 0.3px;
+                border: 1px solid {borda};
+            }}
+        """)
+        return lbl
 
     def _recarregar_tabela_ciclo(self):
         """Recarrega só a tabela/cards do ciclo ativo (sem remontar abas)."""
@@ -1017,6 +1248,11 @@ class TelaLancamentos(QWidget):
                     texto_item = utils.float_para_moeda(val)
                 else:
                     texto_item = utils.limpar_texto(val)
+                if j == 9:
+                    # Coluna Status -> pilula colorida (estilo V2)
+                    self.tabela.setItem(i, j, QTableWidgetItem(""))
+                    self.tabela.setCellWidget(i, j, self._pilula_status(texto_item))
+                    continue
                 item = QTableWidgetItem(texto_item)
                 if j in cols_financeiras:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -1030,6 +1266,7 @@ class TelaLancamentos(QWidget):
         self.tabela.setColumnWidth(1, 160)
         self.tabela.setColumnWidth(2, 380)
         self.tabela.setColumnWidth(3, 110)
+        self.tabela.setColumnWidth(9, 100)
         self.tabela.setUpdatesEnabled(True)
 
     def _criar_glow_wrapper(self, card_frame):
@@ -1111,8 +1348,8 @@ class TelaLancamentos(QWidget):
             f"{plural(n_con, 'Conclusão', 'Conclusões')}"
         )
         self.lbl_total_medicao.setText(
-            f'<span style="color:#94a3b8;">Total da Medição:</span> '
-            f'<span style="color:#38bdf8; font-weight:bold;">'
+            f'<span style="color:#bfdbfe;">Total da Medição:</span> '
+            f'<span style="color:#ffffff; font-weight:800;">'
             f"{utils.float_para_moeda(total_medicao)}</span>"
         )
 
@@ -1310,7 +1547,7 @@ class TelaLancamentos(QWidget):
                 "Cadastre-o em Cadastros ou selecione manualmente."
             )
 
-        self.frame_formulario.setVisible(True)
+        self._mostrar_formulario_animado()
 
         msg = "Arquivo importado com sucesso.\n\nCheque os campos preenchidos!"
         if avisos:
@@ -1330,6 +1567,7 @@ class TelaLancamentos(QWidget):
 
         # Após import: PC na mesma aba ou em outro ciclo
         self.tentar_carregar_pc_existente()
+        self._focar_campo_formulario(self.txt_valor_a_pagar)
 
     def _aplicar_dados_pc_no_formulario(self, dados, modo_edicao=False, preencher_pagos=True):
         """Preenche o formulário com dados de um PC (edição ou nova parcela)."""
@@ -1418,7 +1656,8 @@ class TelaLancamentos(QWidget):
             )
             self.btn_excluir.setVisible(True)
             self.btn_salvar.setText("Atualizar Lançamento")
-            self.frame_formulario.setVisible(True)
+            self._mostrar_formulario_animado()
+            self._focar_campo_formulario(self.txt_valor_a_pagar)
             return
 
         # 2) Outro ciclo / histórico → nova parcela
@@ -1432,7 +1671,7 @@ class TelaLancamentos(QWidget):
         self.btn_excluir.setVisible(False)
         self.btn_salvar.setText("Salvar Lançamento")
         self._aplicar_dados_pc_no_formulario(base, modo_edicao=False, preencher_pagos=True)
-        self.frame_formulario.setVisible(True)
+        self._mostrar_formulario_animado()
 
         if total > 0 and pagos >= 0:
             pct = self._formatar_percentual_exibicao((pagos / total) * 100.0)
@@ -1441,7 +1680,14 @@ class TelaLancamentos(QWidget):
         else:
             extra = ""
 
-        informar(self, "PC encontrado em medição anterior", f"O PC « {pc} » já foi lançado em outra medição deste projeto.\n\nDados base e valor já pago foram preenchidos.\n{extra}Informe o valor a pagar desta parcela e revise os campos antes de salvar.")
+        informar(
+            self,
+            "PC encontrado em medição anterior",
+            f"O PC « {pc} » já foi lançado em outra medição deste projeto.\n\n"
+            f"Dados base e valor já pago foram preenchidos.\n{extra}"
+            "Informe o valor a pagar desta parcela e revise os campos antes de salvar.",
+        )
+        self._focar_campo_formulario(self.txt_valor_a_pagar)
 
     def abrir_formulario_novo(self):
         if not self.garantir_ciclo_ativo():
@@ -1459,7 +1705,6 @@ class TelaLancamentos(QWidget):
         self.txt_nota_fiscal.clear()
         self.txt_regional.clear()
         self.btn_excluir.setVisible(False)
-        self.frame_formulario.setVisible(True)
 
         self.radio_valor.setChecked(True)
         self.radio_valor_pago.setChecked(True)
@@ -1468,6 +1713,8 @@ class TelaLancamentos(QWidget):
         self.txt_valor_a_pagar.setPlaceholderText("Valor a Pagar (R$)")
         self.txt_valores_pagos.setPlaceholderText("Valores Pagos (R$)")
         self.btn_salvar.setText("Salvar Lançamento")
+        self._mostrar_formulario_animado()
+        self._focar_campo_formulario(self.txt_pc)
 
     def abrir_formulario_edicao(self):
         self.carregar_fornecedores_combo()
@@ -1510,7 +1757,6 @@ class TelaLancamentos(QWidget):
         self.txt_regional.setText(self.tabela.item(row, 13).text())
         
         self.btn_excluir.setVisible(True)
-        self.frame_formulario.setVisible(True)
         self.btn_salvar.setText("Atualizar Lançamento")
 
         # Rádios em % + placeholders de percentual
@@ -1520,6 +1766,8 @@ class TelaLancamentos(QWidget):
         self.txt_valores_pagos.setPlaceholderText("Percentual já pago(%)")
         self.lbl_preview_porcentagem.setVisible(False)
         self.atualizar_preview_porcentagem()
+        self._mostrar_formulario_animado()
+        self._focar_campo_formulario(self.txt_valor_a_pagar)
 
     def _formatar_percentual_exibicao(self, pct):
         """Formata % para o campo de edição (evita 50.0000001)."""
@@ -1531,8 +1779,67 @@ class TelaLancamentos(QWidget):
             return str(int(round(pct)))
         return f"{pct:.2f}".rstrip("0").rstrip(".")
 
+    def _parar_anim_formulario(self):
+        if self._anim_formulario is not None:
+            self._anim_formulario.stop()
+            self._anim_formulario = None
+
+    def _mostrar_formulario_animado(self):
+        """Expande o formulário com animação (reaproveita se já estiver aberto)."""
+        frame = self.frame_formulario
+        # Já aberto e expandido — só garante visível
+        if frame.isVisible() and frame.maximumHeight() > 40:
+            frame.setMaximumHeight(16777215)
+            return
+
+        self._parar_anim_formulario()
+        frame.setVisible(True)
+        frame.setMaximumHeight(0)
+        frame.updateGeometry()
+        QApplication.processEvents()
+
+        alvo = max(frame.sizeHint().height(), frame.minimumSizeHint().height(), 220)
+        anim = QPropertyAnimation(frame, b"maximumHeight", self)
+        anim.setDuration(280)
+        anim.setStartValue(0)
+        anim.setEndValue(alvo)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        def _liberar():
+            frame.setMaximumHeight(16777215)
+            self._anim_formulario = None
+
+        anim.finished.connect(_liberar)
+        self._anim_formulario = anim
+        anim.start()
+
+    def _ocultar_formulario_animado(self):
+        """Recolhe o formulário com animação e só então esconde."""
+        frame = self.frame_formulario
+        if not frame.isVisible():
+            return
+
+        self._parar_anim_formulario()
+        altura = frame.height() if frame.height() > 0 else frame.sizeHint().height()
+        frame.setMaximumHeight(altura)
+
+        anim = QPropertyAnimation(frame, b"maximumHeight", self)
+        anim.setDuration(220)
+        anim.setStartValue(altura)
+        anim.setEndValue(0)
+        anim.setEasingCurve(QEasingCurve.Type.InCubic)
+
+        def _esconder():
+            frame.setVisible(False)
+            frame.setMaximumHeight(0)
+            self._anim_formulario = None
+
+        anim.finished.connect(_esconder)
+        self._anim_formulario = anim
+        anim.start()
+
     def fechar_formulario(self):
-        self.frame_formulario.setVisible(False)
+        self._ocultar_formulario_animado()
 
     def salvar_registro(self):
         """Valida regras financeiras, campos obrigatórios e salva o lançamento."""
@@ -1644,24 +1951,70 @@ class TelaLancamentos(QWidget):
         else:
             erro(self, "Erro ao salvar lançamento", erro or "Não foi possível gravar o lançamento no banco de dados.")
 
+    def on_tabela_menu_contexto(self, pos):
+        """Menu rápido na tabela: excluir lançamento da linha."""
+        row = self.tabela.indexAt(pos).row()
+        if row < 0:
+            return
+        item_pc = self.tabela.item(row, 0)
+        if not item_pc:
+            return
+        pc = item_pc.text().strip()
+        if not pc:
+            return
+
+        self.tabela.selectRow(row)
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: rgba(15, 23, 42, 245);
+                color: #f8fafc;
+                border: 1px solid rgba(148, 163, 184, 70);
+                border-radius: 10px;
+                padding: 6px;
+            }
+            QMenu::item {
+                padding: 8px 18px;
+                border-radius: 6px;
+            }
+            QMenu::item:selected {
+                background-color: rgba(225, 29, 72, 180);
+            }
+        """)
+        acao = menu.addAction("Excluir lançamento")
+        escolhido = menu.exec(self.tabela.viewport().mapToGlobal(pos))
+        if escolhido == acao:
+            self._excluir_lancamento_pc(pc)
+
+    def _excluir_lancamento_pc(self, pc):
+        """Exclui um PC do ciclo ativo (com confirmação)."""
+        proj = self.projeto_atual()
+        if not confirmar(
+            self,
+            "Confirmar exclusão",
+            f"Tem certeza que deseja excluir o lançamento « {pc} » "
+            f"do projeto « {proj} »?",
+        ):
+            return
+        sucesso, msg_erro = database.deletar_lancamento(
+            pc, nome_projeto=proj, ciclo_id=self.ciclo_id_ativo
+        )
+        if sucesso:
+            informar(self, "Sucesso", f"Lançamento « {pc} » excluído!")
+            if self.pc_em_edicao and self.pc_em_edicao == pc:
+                self.fechar_formulario()
+            self.carregar_dados_tabela()
+        else:
+            erro(
+                self,
+                "Erro ao excluir",
+                msg_erro or "Não foi possível excluir o lançamento do banco de dados.",
+            )
+
     def excluir_registro(self):
         if not self.pc_em_edicao:
             return
-
-        proj = self.projeto_atual()
-
-        resposta = confirmar(self, "Confirmar Exclusão", f"Tem certeza que deseja excluir o lançamento '{self.pc_em_edicao}' do projeto '{proj}'?")
-
-        if resposta:
-            sucesso, erro = database.deletar_lancamento(
-                self.pc_em_edicao, nome_projeto=proj, ciclo_id=self.ciclo_id_ativo
-            )
-            if sucesso:
-                informar(self, "Sucesso", f"Lançamento '{self.pc_em_edicao}' excluído!")
-                self.fechar_formulario()
-                self.carregar_dados_tabela()
-            else:
-                erro(self, "Erro ao excluir", erro or "Não foi possível excluir o lançamento do banco de dados.")
+        self._excluir_lancamento_pc(self.pc_em_edicao)
 
     def exportar_excel(self):
         proj = self.projeto_atual()
@@ -1768,42 +2121,55 @@ class TelaLancamentos(QWidget):
                 erro(self, "Erro no Fechamento", erro or "Ocorreu um erro ao tentar fechar a medição.\nNenhum dado do banco foi alterado.")
 
     def limpar_medicao_projeto(self):
+        """Recomeça só a aba/ciclo ativo (não apaga outras abas nem histórico)."""
         proj = self.projeto_atual()
         ciclo_id = self.ciclo_id_ativo
 
-        if ciclo_id:
-            ciclo = database.obter_ciclo(ciclo_id)
-            nome_aba = self._titulo_aba(ciclo) if ciclo else "aba atual"
-            msg = (
-                f"Você está prestes a EXCLUIR os lançamentos da aba '{nome_aba}' "
-                f"do projeto '{proj}'.\n\n"
-                "As outras abas e os cadastros de fornecedores serão mantidos.\n"
-                "Deseja continuar?"
+        if not ciclo_id:
+            alerta(
+                self,
+                "Nenhuma aba ativa",
+                "Selecione ou crie uma aba de medição antes de recomeçar.\n\n"
+                "O recomeçar apaga apenas os lançamentos da aba atual.",
             )
-        else:
-            nome_aba = proj
-            msg = (
-                f"Você está prestes a EXCLUIR TODOS OS LANÇAMENTOS do projeto '{proj}'.\n\n"
-                "Os cadastros de fornecedores serão mantidos intactos.\n"
-                "Deseja continuar?"
-            )
-
-        primeiro_alerta = confirmar(self, "⚠️ ATENÇÃO: Limpar Lançamentos", msg)
-
-        if not primeiro_alerta:
             return
 
-        segundo_alerta = confirmar(self, "Confirmação Explícita", "Esta operação NÃO PODERÁ SER DESFEITA.\n\nConfirma a exclusão definitiva?")
+        ciclo = database.obter_ciclo(ciclo_id)
+        nome_aba = self._titulo_aba(ciclo) if ciclo else "aba atual"
+        msg = (
+            f"Você está prestes a EXCLUIR os lançamentos da aba « {nome_aba} » "
+            f"do projeto « {proj} ».\n\n"
+            "• Outras abas permanecem intactas\n"
+            "• Histórico / medições fechadas não são alterados\n"
+            "• Cadastros de fornecedores permanecem\n\n"
+            "Deseja continuar?"
+        )
 
-        if segundo_alerta:
-            sucesso, erro = database.limpar_lancamentos_projeto(
-                nome_projeto=proj, ciclo_id=ciclo_id
+        if not confirmar(self, "Recomeçar medição da aba", msg):
+            return
+        if not confirmar(
+            self,
+            "Confirmação explícita",
+            "Esta operação NÃO poderá ser desfeita para os lançamentos desta aba.\n\n"
+            "Confirma a exclusão?",
+        ):
+            return
+
+        sucesso, msg_erro = database.limpar_lancamentos_projeto(
+            nome_projeto=proj, ciclo_id=ciclo_id
+        )
+        if sucesso:
+            informar(
+                self,
+                "Aba reiniciada",
+                f"Lançamentos da aba « {nome_aba} » removidos.\n"
+                "A aba continua aberta para novos lançamentos.",
             )
-            if sucesso:
-                informar(self, "Lançamentos Removidos", f"Lançamentos removidos com sucesso ({nome_aba}).")
-                if ciclo_id:
-                    self.ciclo_id_ativo = None
-                self.fechar_formulario()
-                self.carregar_dados_tabela()
-            else:
-                erro(self, "Erro ao Limpar", erro or "Não foi possível remover os lançamentos do banco de dados.")
+            self.fechar_formulario()
+            self.carregar_dados_tabela()
+        else:
+            erro(
+                self,
+                "Erro ao recomeçar",
+                msg_erro or "Não foi possível remover os lançamentos do banco de dados.",
+            )

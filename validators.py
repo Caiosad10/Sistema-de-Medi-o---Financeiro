@@ -16,14 +16,14 @@ def exibir_alerta(parent, titulo: str, mensagem: str):
             color: #f8fafc;
         }
         QPushButton {
-            background-color: #3b82f6;
+            background-color: #6d5dd3;
             color: white;
             border-radius: 4px;
             padding: 6px 12px;
             font-weight: bold;
         }
         QPushButton:hover {
-            background-color: #2563eb;
+            background-color: #5b4bc4;
         }
     """)
     msg.exec()

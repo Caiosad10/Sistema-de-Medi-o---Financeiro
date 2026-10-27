@@ -17,34 +17,36 @@ COLS_FINANCEIRAS = {3, 4, 5, 6, 7, 8}
 
 ESTILO_TABELA_LANCAMENTOS = """
     QTableWidget {
-        background-color: #1e293b;
-        color: #f8fafc;
-        border: 1px solid #334155;
-        border-radius: 12px;
+        background-color: rgba(15, 23, 42, 145);
+        color: #e2e8f0;
+        border: 1px solid rgba(148, 163, 184, 45);
+        border-radius: 16px;
         gridline-color: transparent;
-        selection-background-color: #3b82f6;
+        selection-background-color: rgba(99, 102, 241, 160);
         selection-color: #ffffff;
+        outline: none;
     }
     QTableWidget::item {
         padding: 8px 12px;
-        border-bottom: 1px solid #0f172a;
+        border-bottom: 1px solid rgba(148, 163, 184, 22);
     }
     QTableWidget::item:hover {
-        background-color: #334155;
-        color: #38bdf8;
+        background-color: rgba(51, 65, 85, 120);
+        color: #f8fafc;
     }
     QTableWidget::item:selected {
-        background-color: #2563eb;
+        background-color: rgba(99, 102, 241, 180);
         color: #ffffff;
     }
     QHeaderView::section {
-        background-color: #0f172a;
+        background-color: rgba(15, 23, 42, 200);
         color: #94a3b8;
-        font-weight: bold;
-        font-size: 12px;
-        padding: 10px;
+        font-weight: 700;
+        font-size: 11px;
+        letter-spacing: 0.4px;
+        padding: 12px 10px;
         border: none;
-        border-bottom: 2px solid #334155;
+        border-bottom: 1px solid rgba(148, 163, 184, 50);
     }
 """
 

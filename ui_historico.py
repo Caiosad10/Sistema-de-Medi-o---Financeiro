@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QHeaderView, QMessageBox, QFrame, QApplication, QStackedWidget
 )
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QKeySequence, QShortcut
 import database
 import utils
 
@@ -14,6 +15,7 @@ class TelaHistorico(QWidget):
         self.medicao_selecionada = None
         self.dados_histórico = []
         self.init_ui()
+        self._registrar_atalhos()
         self.carregar_projetos_combo()
         self.carregar_dados_iniciais()
     
@@ -24,6 +26,7 @@ class TelaHistorico(QWidget):
         
         # Stacked widget para alternar entre lista e visualização
         self.stacked = QStackedWidget()
+        self.stacked.setStyleSheet("background: transparent;")
         
         # --- TELA 1: LISTA DE MEDIÇÕES ---
         tela_lista = QWidget()
@@ -34,22 +37,35 @@ class TelaHistorico(QWidget):
         frame_filtros = QFrame()
         frame_filtros.setStyleSheet("""
             QFrame {
-                background-color: #1e293b;
-                border-radius: 10px;
-                padding: 15px;
+                background-color: rgba(15, 23, 42, 90);
+                border: 1px solid rgba(148, 163, 184, 40);
+                border-radius: 16px;
+                padding: 10px;
             }
             QLabel {
-                color: #f8fafc;
-                font-weight: bold;
+                color: #e2e8f0;
+                font-weight: 700;
+                background: transparent;
             }
             QComboBox {
-                background-color: #0f172a;
+                background-color: rgba(15, 23, 42, 210);
                 color: #f8fafc;
-                border: 1px solid #334155;
-                border-radius: 6px;
-                padding: 8px;
+                border: 1px solid rgba(148, 163, 184, 70);
+                border-radius: 10px;
+                padding: 8px 12px;
                 min-width: 150px;
             }
+            QComboBox:hover {
+                border: 1px solid rgba(96, 165, 250, 180);
+            }
+            QComboBox::drop-down { border: none; width: 24px; }
+            QComboBox QAbstractItemView {
+                background-color: #0f172a;
+                color: #f8fafc;
+                selection-background-color: #6366f1;
+                border: 1px solid #334155;
+            }
+
         """)
         layout_filtros = QHBoxLayout(frame_filtros)
         
@@ -91,29 +107,36 @@ class TelaHistorico(QWidget):
         self.lista_medicoes.doubleClicked.connect(self.abrir_visualizacao)
         self.lista_medicoes.setStyleSheet("""
             QTableWidget {
-                background-color: #0f172a;
-                color: #f8fafc;
-                border: 1px solid #334155;
-                border-radius: 10px;
+                background-color: rgba(15, 23, 42, 145);
+                color: #e2e8f0;
+                border: 1px solid rgba(148, 163, 184, 45);
+                border-radius: 16px;
+                gridline-color: transparent;
+                selection-background-color: rgba(99, 102, 241, 160);
+                selection-color: #ffffff;
+                outline: none;
             }
             QHeaderView::section {
-                background-color: #1e293b;
+                background-color: rgba(15, 23, 42, 200);
                 color: #94a3b8;
-                padding: 10px;
+                font-weight: 700;
+                font-size: 11px;
+                padding: 12px 10px;
                 border: none;
-                border-bottom: 2px solid #334155;
+                border-bottom: 1px solid rgba(148, 163, 184, 50);
             }
             QTableWidget::item {
                 padding: 8px 12px;
-                border-bottom: 1px solid #1e293b;
+                border-bottom: 1px solid rgba(148, 163, 184, 22);
             }
             QTableWidget::item:hover {
-                background-color: #334155;
+                background-color: rgba(51, 65, 85, 120);
             }
             QTableWidget::item:selected {
-                background-color: #3b82f6;
+                background-color: rgba(99, 102, 241, 180);
                 color: #ffffff;
             }
+
         """)
         self.lista_medicoes.verticalHeader().setVisible(False)
         
@@ -128,17 +151,24 @@ class TelaHistorico(QWidget):
         self.btn_voltar = QPushButton("← Voltar para lista")
         self.btn_voltar.setStyleSheet("""
             QPushButton {
-                background-color: #475569;
-                color: #ffffff;
-                font-weight: bold;
-                border: none;
-                border-radius: 8px;
-                padding: 10px 20px;
+                background-color: rgba(15, 23, 42, 140);
+                color: #e2e8f0;
+                font-weight: 700;
+                font-size: 12px;
+                border: 1px solid rgba(148, 163, 184, 55);
+                border-radius: 12px;
+                padding: 10px 18px;
                 text-align: left;
             }
             QPushButton:hover {
-                background-color: #334155;
+                background-color: rgba(51, 65, 85, 200);
+                border: 1px solid rgba(147, 197, 253, 140);
+                color: #ffffff;
             }
+            QPushButton:pressed {
+                background-color: rgba(99, 102, 241, 160);
+            }
+
         """)
         self.btn_voltar.clicked.connect(self.voltar_para_lista)
         
@@ -150,9 +180,10 @@ class TelaHistorico(QWidget):
         
         # Cards da medição (copiados da tela de lançamentos)
         layout_cards = QHBoxLayout()
-        self.card_mobilizacao = self.criar_card_visualizacao("Mobilização", "R$ 0,00", "#b45309")
-        self.card_adiantamento = self.criar_card_visualizacao("Adiantamento", "R$ 0,00", "#1d4ed8")
-        self.card_conclusao = self.criar_card_visualizacao("Conclusão", "R$ 0,00", "#6d28d9")
+        layout_cards.setSpacing(12)
+        self.card_mobilizacao = self.criar_card_visualizacao("Mobilização", "R$ 0,00", "rgba(20, 184, 166, 200)")
+        self.card_adiantamento = self.criar_card_visualizacao("Adiantamento", "R$ 0,00", "rgba(245, 158, 11, 200)")
+        self.card_conclusao = self.criar_card_visualizacao("Conclusão", "R$ 0,00", "rgba(139, 92, 246, 200)")
         
         layout_cards.addWidget(self.card_mobilizacao)
         layout_cards.addWidget(self.card_adiantamento)
@@ -172,37 +203,51 @@ class TelaHistorico(QWidget):
         
         layout_principal.addWidget(self.stacked)
     
+
+    def _registrar_atalhos(self):
+        sc = QShortcut(QKeySequence("Esc"), self)
+        sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        sc.activated.connect(self._atalho_esc)
+
+    def _atalho_esc(self):
+        if self.stacked.currentIndex() == 1:
+            self.voltar_para_lista()
+
     def criar_card_visualizacao(self, titulo, valor, cor):
         frame = QFrame()
+        frame.setMinimumHeight(72)
+        frame.setMaximumHeight(88)
         frame.setStyleSheet(f"""
             QFrame {{
                 background: qlineargradient(
                     x1: 0, y1: 0, x2: 1, y2: 1,
                     stop: 0 {cor},
-                    stop: 1 #0f172a
+                    stop: 0.5 rgba(255, 255, 255, 22),
+                    stop: 1 rgba(15, 23, 42, 120)
                 );
-                border-radius: 12px;
+                border-radius: 14px;
                 border: 1px solid {cor};
-                padding: 6px;
             }}
         """)
-        
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(15, 12, 15, 12)
+        layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(4)
-        
         lbl_titulo = QLabel(titulo)
-        lbl_titulo.setStyleSheet("color: #e2e8f0; font-size: 11px; font-weight: 700; background: transparent; border: none;")
-        
+        lbl_titulo.setStyleSheet(
+            "color: #e2e8f0; font-size: 11px; font-weight: 700; "
+            "background: transparent; border: none;"
+        )
         lbl_valor = QLabel(valor)
-        lbl_valor.setStyleSheet("color: #ffffff; font-size: 22px; font-weight: 800; background: transparent; border: none;")
+        lbl_valor.setStyleSheet(
+            "color: #ffffff; font-size: 20px; font-weight: 800; "
+            "background: transparent; border: none;"
+        )
         lbl_valor.setObjectName("valor_card")
-        
         layout.addWidget(lbl_titulo)
         layout.addWidget(lbl_valor)
-        
         return frame
-    
+
+
     def carregar_projetos_combo(self):
         self.combo_projeto.blockSignals(True)
         self.combo_projeto.clear()

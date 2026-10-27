@@ -3,7 +3,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 SIZE = 512
 BG = (15, 23, 42, 255)        # slate-900 (#0f172a)
-ACCENT = (59, 130, 246, 255)  # azul (#3b82f6)
+ACCENT = (59, 130, 246, 255)  # azul (#6d5dd3)
 ACCENT_DARK = (37, 99, 235, 255)
 WHITE = (248, 250, 252, 255)
 SUBTLE = (148, 163, 184, 255)
