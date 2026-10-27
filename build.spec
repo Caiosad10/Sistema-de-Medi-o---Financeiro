@@ -2,7 +2,7 @@ from PyInstaller.utils.hooks import collect_data_files
 
 # -*- mode: python ; coding: utf-8 -*-
 
-exe_name = "SisMed v2.5"
+exe_name = "SisMed v3.7"
 
 additional_files = [
     ('TEMPLATE_MEDICAO_AEV_LIMPO_V2_VALIDADO.xlsx', '.'),
