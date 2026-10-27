@@ -7,6 +7,7 @@ exe_name = "SisMed v3.7"
 additional_files = [
     ('TEMPLATE_MEDICAO_AEV_LIMPO_V2_VALIDADO.xlsx', '.'),
     ('PROJETO_AEV_CORRIGIDO_COM_DADOS.xlsx', '.'),
+    ('sismed_icon.png', '.'),
 ]
 
 a = Analysis(
@@ -39,6 +40,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name=exe_name,
+    icon='sismed_icon.ico',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

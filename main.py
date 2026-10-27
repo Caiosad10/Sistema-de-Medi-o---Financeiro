@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QIcon
 from ui_icons import icone
 import database
+import paths
 from versao import VERSAO
 from ui_cadastro import TelaCadastro
 from ui_lancamentos import TelaLancamentos
@@ -51,6 +52,7 @@ class JanelaPrincipal(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"Sistema de Gerenciamento de Medições e Pagamentos - v{VERSAO}")
+        self.setWindowIcon(QIcon(paths.get_resource_path("sismed_icon.png")))
         self.resize(1280, 720)
 
         database.inicializar_banco()
